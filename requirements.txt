@@ -1,0 +1,5 @@
+PyQt6==6.7.1
+asyncssh==2.14.2
+cryptography==43.0.1
+proxmoxer==2.0.1
+requests==2.32.3
