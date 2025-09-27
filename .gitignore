@@ -1,0 +1,3 @@
+# SSH-Keys niemals ins Repo aufnehmen
+*.key
+*.pub
