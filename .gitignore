@@ -1,3 +1,76 @@
-# SSH-Keys niemals ins Repo aufnehmen
+# --- Python Bytecode / Caches ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.python-version
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# --- Builds / Distribution ---
+build/
+dist/
+*.spec
+pip-wheel-metadata/
+
+# --- Virtual Envs ---
+.venv/
+venv/
+
+# --- Qt / PyQt / QtCreator ---
+*.qmlc
+*.jsc
+*.qrc.dep
+*.pro.user
+*.pro.user.*
+*.qtc_clangd
+.qtc/
+CMakeFiles/
+CMakeCache.txt
+cmake-build-*/
+*.creator.*
+*.autosave
+
+# --- IDE/Editor ---
+.vscode/
+.idea/
+*.code-workspace
+*.swp
+*.swo
+*~
+tags
+
+# --- OS-Müll ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Logs / Temp ---
+*.log
+logs/
+tmp/
+temp/
+
+# --- Secrets / Schlüssel / Zertifikate ---
 *.key
+*.pem
+*.crt
 *.pub
+*.p12
+*.pfx
+*.kdbx
+*.env
+.envrc
+.env.*
+
+# --- Sonstiges, falls lokal nur testweise ---
+# *.sqlite
+# *.csv
+# *.json
