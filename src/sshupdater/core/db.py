@@ -145,3 +145,13 @@ def get_host_password(host_id: int) -> Optional[str]:
     if not row or row["password_enc"] is None:
         return None
     return crypto.decrypt_str(row["password_enc"])
+
+def set_check_result(host_id: int, last_check: str, pending_updates: int | None) -> None:
+    con = _connect()
+    con.execute(
+        "UPDATE hosts SET last_check=?, pending_updates=? WHERE id=?",
+        (last_check, pending_updates, host_id),
+    )
+    con.commit()
+    con.close()
+
