@@ -1,10 +1,10 @@
 # SSH Updater
 
-Ein **Qt/PyQt6-Tool**, um mehrere Linux-Clients/VMs auf einem Proxmox-Server per SSH zu prüfen, zu simulieren und Updates auszuführen.
+Ein **Qt/PyQt6-Tool**, um mehrere Linux-Clients/VMs auf in einem Netzwerk per SSH zu prüfen, zu simulieren und Updates auszuführen.Anzeige von Online/offline sowie zählen der Pakete des Updates.
 
 ## ✨ Features
 - Hostliste mit Filterfunktion  
-- Aktionen: **Prüfen**, **Simulieren**, **Upgrade**  
+- Aktionen: **Prüfen**, **Simulieren**, **Upgrade**, **Bereinigen**
 - Import von vorhandenen Proxmox-Clients  
 - Konfigurationsdialog für Einstellungen  
 - Übersichtliche Qt-Oberfläche mit Tabelle  

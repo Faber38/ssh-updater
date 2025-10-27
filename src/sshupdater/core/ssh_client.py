@@ -103,15 +103,22 @@ async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
 # ---------- Simulation (Dry-Run) ----------
 
 async def _sim_debian(conn):
+    # 1) Index aktualisieren (sprachneutral)
+    await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; sudo -n apt-get -qq update'")
+
+    # 2) Simulation fahren
     code, out, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt-get -s dist-upgrade'")
+
+    # 3) Pakete zählen
     n = 0
     for line in out.splitlines():
-        if line.startswith("Inst "):
+        if line.startswith("Inst "):   # apt-get -s schreibt 'Inst <pkg> ...'
             n += 1
     if n == 0:
-        m = re.search(r'(\d+)\s+upgraded', out)
-        if m:
-            n = int(m.group(1))
+        code2, out2, _ = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt list --upgradable 2>/dev/null | tail -n +2 | wc -l'")
+        try: n = max(n, int(out2.strip()))
+        except: pass
+
     return n, out, err
 
 async def _sim_rpm(conn):
@@ -305,3 +312,33 @@ async def autoremove_host_stream(host: Dict[str, Any]):
     except (asyncssh.Error, OSError) as e:
         yield {"type": "result", "result": {"status": "error", "note": f"SSH: {e}"}}
         return
+
+# ---------- Reboot ----------
+
+async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
+    """Löst einen Reboot auf dem Zielhost aus (fire-and-forget)."""
+    name = host.get("name") or f"id:{host['id']}"
+    ip = host.get("primary_ip")
+    port = int(host.get("port") or 22)
+    user = host.get("user") or "root"
+    if not ip or not user:
+        return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
+
+    params = _auth_params(host)
+    try:
+        async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
+            # Fire-and-forget: Command im Hintergrund starten und gleich zurückkehren
+            cmd = "bash -lc 'nohup sudo -n systemctl reboot >/dev/null 2>&1 & disown; echo TRIGGERED'"
+            code, out, err = await _run(conn, cmd, timeout=10)
+            if code == 0 and "TRIGGERED" in (out or ""):
+                return {"host_id": host["id"], "name": name, "status": "ok", "note": "Reboot ausgelöst"}
+            else:
+                # Fallback versuchen
+                cmd2 = "bash -lc 'nohup sudo -n reboot >/dev/null 2>&1 & disown; echo TRIGGERED'"
+                code2, out2, err2 = await _run(conn, cmd2, timeout=10)
+                if code2 == 0 and "TRIGGERED" in (out2 or ""):
+                    return {"host_id": host["id"], "name": name, "status": "ok", "note": "Reboot ausgelöst"}
+                return {"host_id": host["id"], "name": name, "status": "error", "note": (err or err2 or 'Unbekannter Fehler')}
+    except (asyncssh.Error, OSError) as e:
+        # Wenn die Verbindung sofort gekappt wird, war der Reboot sehr wahrscheinlich erfolgreich
+        return {"host_id": host["id"], "name": name, "status": "ok", "note": f"Reboot (verbindung beendet): {e}"}
