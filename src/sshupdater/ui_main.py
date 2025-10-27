@@ -97,10 +97,37 @@ class MainWindow(QtWidgets.QMainWindow):
     def _find_row_by_host_id(self, host_id: int) -> int:
         model = self.table.model()
         for r in range(model.rowCount()):
-            name_item = model.item(r, 1)  # <- Spalte 1 statt 0
+            name_item = model.item(r, 1)  
             if name_item and name_item.data(QtCore.Qt.ItemDataRole.UserRole) == host_id:
                 return r
         return -1
+
+    def _make_dot_icon(self, color: str) -> QtGui.QIcon:
+        # Farbe -> runder Punkt als QIcon (gecacht)
+        cache = getattr(self, "_dot_cache", {})
+        if color in cache:
+            return cache[color]
+        pm = QtGui.QPixmap(14, 14)
+        pm.fill(QtCore.Qt.GlobalColor.transparent)
+        painter = QtGui.QPainter(pm)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        brush = QtGui.QBrush(QtGui.QColor(color))
+        pen = QtGui.QPen(QtGui.QColor("#333")); pen.setWidth(1)
+        painter.setPen(pen); painter.setBrush(brush)
+        painter.drawEllipse(1, 1, 12, 12)
+        painter.end()
+        icon = QtGui.QIcon(pm)
+        cache[color] = icon
+        self._dot_cache = cache
+        return icon
+
+    def _status_icon_for(self, online: bool, updates: int | None) -> QtGui.QIcon:
+        # online + keine Updates => grün, online + Updates => gelb, offline/Fehler => rot
+        if not online:
+            return self._make_dot_icon("#e23b3b")  # rot
+        if updates is None:
+            return self._make_dot_icon("#9e9e9e")  # grau (unbekannt)
+        return self._make_dot_icon("#3ac569" if updates == 0 else "#f2b84b")
 
 
     # ========= Prüfen: Worker-Thread + Slots =========
@@ -139,11 +166,20 @@ class MainWindow(QtWidgets.QMainWindow):
         row = self._find_row_by_host_id(res.get("host_id"))
         if row >= 0:
             model = self.table.model()
-            status_text = f"Online – {updates} Updates" if online else "Offline"
-            model.setItem(row, 5, QtGui.QStandardItem(status_text))  # Spalte "Status"
+
+            if online:
+                status_text = f"Online – {updates} Updates"
+                status_item = QtGui.QStandardItem(status_text)
+                status_item.setIcon(self._status_icon_for(True, updates))
+            else:
+                status_item = QtGui.QStandardItem("Offline")
+                status_item.setIcon(self._status_icon_for(False, None))
+
+            model.setItem(row, 5, status_item)  # Spalte "Status"
+
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            model.setItem(row, 6, QtGui.QStandardItem(timestamp))    # Spalte "Letzte Prüfung"
-            
+            model.setItem(row, 6, QtGui.QStandardItem(timestamp))  # "Letzte Prüfung"
+
             # in DB persistieren
             try:
                 from .core import db
@@ -393,38 +429,47 @@ class MainWindow(QtWidgets.QMainWindow):
         hosts = db.list_hosts()
 
         model = QtGui.QStandardItemModel()
-        # erste Spalte: Auswahl (Checkbox)
         model.setHorizontalHeaderLabels(["✓", "Name", "IP", "User", "Auth", "Status", "Letzte Prüfung"])
 
         for h in hosts:
-            chk = QtGui.QStandardItem()                # Checkbox item
+           # Checkbox
+            chk = QtGui.QStandardItem()
             chk.setCheckable(True)
             chk.setCheckState(QtCore.Qt.CheckState.Unchecked)
             chk.setEditable(False)
 
+            # Basisfelder
             name = QtGui.QStandardItem(h.get("name") or "")
-            ip = QtGui.QStandardItem(h.get("primary_ip") or "")
-            user = QtGui.QStandardItem(h.get("user") or "")
-            auth = QtGui.QStandardItem(h.get("auth_method") or "")
-            status = QtGui.QStandardItem(
-                f"Online – {h['pending_updates']} Updates" if h.get("pending_updates") is not None else "—"
-            )
-            last = QtGui.QStandardItem(h.get("last_check") or "—")
-
-            # host_id im ersten echten Datenfeld (z.B. Name) speichern
             name.setData(h["id"], QtCore.Qt.ItemDataRole.UserRole)
 
-            # set flags (optional: nicht editierbar außer checkbox)
-            for it in (name, ip, user, auth, status, last):
+            ip   = QtGui.QStandardItem(h.get("primary_ip") or "")
+            user = QtGui.QStandardItem(h.get("user") or "")
+            auth = QtGui.QStandardItem(h.get("auth_method") or "")
+
+            # Status + Icon
+            pending = h.get("pending_updates")  # kann None sein
+            if pending is None:
+                status_text = "—"
+                status = QtGui.QStandardItem(status_text)
+                # Grau (unklar) – online=True, updates=None -> grau laut _status_icon_for
+                status.setIcon(self._status_icon_for(True, None))
+            else:
+                status_text = f"Online – {int(pending)} Updates"
+                status = QtGui.QStandardItem(status_text)
+                status.setIcon(self._status_icon_for(True, int(pending)))
+
+            # Letzte Prüfung
+            last_item = QtGui.QStandardItem(h.get("last_check") or "—")
+
+            # nicht editierbar (außer Checkbox)
+            for it in (name, ip, user, auth, status, last_item):
                 it.setEditable(False)
 
-            model.appendRow([chk, name, ip, user, auth, status, last])
+            model.appendRow([chk, name, ip, user, auth, status, last_item])
 
         self.table.setModel(model)
         self.table.resizeColumnsToContents()
-        # Optional: die Checkbox-Spalte etwas schmaler machen
         self.table.setColumnWidth(0, 30)
-
 
 
 class _CheckWorker(QtCore.QThread):

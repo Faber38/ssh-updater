@@ -9,6 +9,15 @@ Ein **Qt/PyQt6-Tool**, um mehrere Linux-Clients/VMs auf in einem Netzwerk per SS
 - Konfigurationsdialog für Einstellungen  
 - Übersichtliche Qt-Oberfläche mit Tabelle  
 
+## 🖥️ SSH Updater Vorschau
+
+<p align="center">
+  <img src="src/sshupdater/assets/Beispiel.png" alt="SSH Updater GUI" width="800">
+  <br>
+  <em>Hauptfenster mit Hostübersicht, Update-Status und Proxmox-Integration</em>
+</p>
+
+
 ## 🚀 Quickstart (Entwicklung)
 ```bash
 # Virtuelle Umgebung anlegen und aktivieren
