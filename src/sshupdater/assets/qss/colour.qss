@@ -1,0 +1,121 @@
+/* ==========================================
+   SSH-Updater – Colour+ Theme
+   Frischer Material-Look mit satten Farben
+   ========================================== */
+
+QWidget {
+    background-color: #fdfdfd;
+    color: #1c1c1c;
+    font-family: "Segoe UI", "Noto Sans", "DejaVu Sans";
+    font-size: 10.5pt;
+}
+
+/* Fensterrahmen */
+QMainWindow, QDialog {
+    background-color: #fdfdfd;
+    border: none;
+}
+
+/* Toolbar */
+QToolBar {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #ffb347, stop:1 #ffcc33);
+    border-bottom: 2px solid #f39c12;
+}
+QToolButton {
+    background: transparent;
+    border-radius: 6px;
+    padding: 6px 10px;
+    color: #1a1a1a;
+}
+QToolButton:hover {
+    background-color: rgba(255,255,255,0.35);
+}
+QToolButton:pressed {
+    background-color: rgba(255,255,255,0.55);
+}
+
+/* Tabelle */
+QTableView {
+    background-color: #ffffff;
+    alternate-background-color: #fff7e6;
+    gridline-color: #d6c1a6;
+    selection-background-color: #ffcc80;
+    selection-color: #000;
+    border: 1px solid #e0c59f;
+    border-radius: 6px;
+}
+QHeaderView::section {
+    background-color: #ffecb3;
+    color: #7a4100;
+    font-weight: 600;
+    border: none;
+    padding: 6px;
+}
+
+/* Buttons */
+QPushButton {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #42a5f5, stop:1 #1e88e5);
+    color: white;
+    border: 1px solid #1565c0;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #64b5f6, stop:1 #2196f3);
+}
+QPushButton:pressed {
+    background: #0d47a1;
+}
+
+/* Eingabefelder */
+QLineEdit, QComboBox, QSpinBox {
+    background-color: #ffffff;
+    border: 1px solid #9ec9ff;
+    border-radius: 4px;
+    padding: 4px 6px;
+}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
+    border: 2px solid #42a5f5;
+    padding: 3px 5px;
+}
+
+/* Log-Feld */
+QTextEdit {
+    background-color: #fdfdfd;
+    border: 1px solid #c4e3ff;
+    border-radius: 6px;
+    padding: 6px;
+    selection-background-color: #90caf9;
+}
+
+/* Statusbar */
+QStatusBar {
+    background-color: #fff3cd;
+    border-top: 1px solid #ffecb3;
+}
+
+/* Scrollbars */
+QScrollBar:vertical {
+    border: none;
+    background: #fff5e1;
+    width: 12px;
+    margin: 2px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background: #f9a825;
+    min-height: 24px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #ffb300;
+}
+
+/* Labels */
+QLabel {
+    color: #212121;
+}

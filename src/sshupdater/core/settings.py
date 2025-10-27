@@ -14,5 +14,4 @@ logging.basicConfig(
 
 DB_PATH = DATA_DIR / "app.db"
 CONFIG_ENC = DATA_DIR / "config.enc"
-THEME = "standard"  # "dark" | "light" | "standard"
-
+THEME = "light"  # "dark" | "light" | "colour"

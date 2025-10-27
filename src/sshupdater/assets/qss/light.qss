@@ -1,0 +1,159 @@
+/* ==========================================
+   SSH-Updater – Light Theme (Elegant)
+   ========================================== */
+
+QWidget {
+    background-color: #fafafa;
+    color: #222;
+    font-family: "Segoe UI", "Noto Sans", "DejaVu Sans", Arial;
+    font-size: 10.5pt;
+}
+
+/* Hauptfenster / Dialograhmen */
+QMainWindow, QDialog {
+    background-color: #f9f9f9;
+    border: none;
+}
+
+/* Tabellen */
+QTableView {
+    background-color: #ffffff;
+    alternate-background-color: #f6f8fa;
+    gridline-color: #dddddd;
+    selection-background-color: #d0e9ff;
+    selection-color: #000000;
+    border: 1px solid #d6d6d6;
+    border-radius: 6px;
+}
+QHeaderView::section {
+    background-color: #e9eef3;
+    color: #222;
+    font-weight: bold;
+    border: none;
+    padding: 6px;
+    border-bottom: 1px solid #d0d0d0;
+}
+
+/* Toolbar */
+QToolBar {
+    background-color: #e9eef3;
+    border-bottom: 1px solid #c0c0c0;
+    spacing: 4px;
+    padding: 4px;
+}
+QToolButton {
+    background-color: transparent;
+    border: none;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+QToolButton:hover {
+    background-color: #d8e8ff;
+}
+
+/* Buttons */
+QPushButton {
+    background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #ffffff, stop:1 #dcdcdc);
+    border: 1px solid #b8b8b8;
+    border-radius: 6px;
+    padding: 5px 12px;
+    font-weight: 500;
+}
+QPushButton:hover {
+    background-color: #e5f0ff;
+    border: 1px solid #a5c3ff;
+}
+QPushButton:pressed {
+    background-color: #cde0ff;
+}
+
+/* Combobox & Eingabefelder */
+QLineEdit, QComboBox, QSpinBox {
+    background-color: #ffffff;
+    border: 1px solid #c6c6c6;
+    border-radius: 4px;
+    padding: 4px 6px;
+}
+QComboBox::drop-down {
+    border-left: 1px solid #b0b0b0;
+    width: 22px;
+}
+QComboBox QAbstractItemView {
+    border: 1px solid #a0a0a0;
+    background-color: #ffffff;
+    selection-background-color: #d0e9ff;
+}
+
+/* Labels & Hinweise */
+QLabel {
+    color: #333333;
+}
+
+/* Log-Feld */
+QTextEdit {
+    background-color: #ffffff;
+    border: 1px solid #cccccc;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+/* Statusbar */
+QStatusBar {
+    background-color: #eaeef2;
+    border-top: 1px solid #cccccc;
+}
+
+/* Scrollbars (dezent hellgrau) */
+QScrollBar:vertical {
+    border: none;
+    background: #f0f0f0;
+    width: 12px;
+    margin: 2px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical {
+    background: #c0c0c0;
+    min-height: 24px;
+    border-radius: 6px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #a0a0a0;
+}
+/* --- Effekte: sanftes Hover / Focus ---------------------------------- */
+
+/* Tabellen: Zeilen-Hover und klarere Auswahl */
+QTableView::item:hover {
+    background-color: #eaf3ff;    /* leichtes Blau beim Überfahren */
+}
+QTableView::item:selected {
+    background-color: #cfe5ff;    /* etwas kräftiger bei Auswahl */
+    color: #000;
+}
+
+/* Eingabefelder: dezenter Fokus-Ring */
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {
+    border: 2px solid #7aa7ff;
+    padding: 3px 5px;             /* 1px weniger, damit Gesamthöhe gleich bleibt */
+    background-color: #ffffff;
+}
+
+/* Buttons: Hover/Pressed etwas plastischer, Disabled heller */
+QPushButton:hover {
+    background-color: #e9f2ff;
+    border: 1px solid #9fbfff;
+}
+QPushButton:pressed {
+    background-color: #d6e7ff;
+}
+QPushButton:disabled {
+    color: #888;
+    background-color: #efefef;
+    border: 1px solid #d6d6d6;
+}
+
+/* Toolbar-Buttons: Hover sichtbar */
+QToolButton:hover {
+    background-color: #e9f2ff;
+    border-radius: 4px;
+}

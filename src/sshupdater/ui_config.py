@@ -1,10 +1,12 @@
 from __future__ import annotations
+from pathlib import Path
 from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
     QMessageBox, QFormLayout, QLineEdit, QComboBox, QSpinBox, QFileDialog, QWidget, QLabel
 )
-from .core import db
+from .core import db, settings
+
 
 class HostEditDialog(QDialog):
     def __init__(self, parent: QWidget | None, host: dict | None = None):
@@ -95,6 +97,23 @@ class ConfigDialog(QDialog):
         self.table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self.table, 1)
 
+        # --- Darstellung: Theme-Auswahl (nur UI, noch ohne Funktion) ---
+        row_theme = QHBoxLayout()
+        row_theme.addWidget(QLabel("Darstellung:"))
+
+        self.cmb_theme = QComboBox()
+        self.cmb_theme.addItems(["Hell", "Dunkel", "Standard", "Colour"])
+
+        # aktuellen Wert aus settings vorwählen
+        cur = getattr(settings, "THEME", "standard").lower()
+        index_map = {"light": 0, "dark": 1, "standard": 2, "colour": 3}
+        self.cmb_theme.setCurrentIndex(index_map.get(cur, 2))
+
+        row_theme.addWidget(self.cmb_theme, 1)
+        lay.addLayout(row_theme)
+        self.cmb_theme.currentIndexChanged.connect(lambda *_: self._apply_theme_choice())
+
+
         # Buttons
         btns = QHBoxLayout()
         self.b_add = QPushButton("Hinzufügen")
@@ -112,6 +131,7 @@ class ConfigDialog(QDialog):
         self.b_close.clicked.connect(self.accept)
 
         self._reload()
+        self._apply_theme_choice()
 
     def _reload(self):
         hosts = db.list_hosts()
@@ -193,3 +213,43 @@ class ConfigDialog(QDialog):
             con.execute("DELETE FROM hosts WHERE id=?", (hid,))
             con.commit(); con.close()
             self._reload()
+
+    def _apply_theme_choice(self):
+        """Auswahl aus self.cmb_theme anwenden und persistent speichern."""
+        import sys  # lokal, um keinen globalen Import zu ändern
+        from PyQt6 import QtWidgets
+
+        # Index -> Theme-String
+        idx = self.cmb_theme.currentIndex()
+        theme = {0: "light", 1: "dark", 2: "standard", 3: "colour"}.get(idx, "standard")
+
+        # in settings merken + persistent speichern
+        settings.THEME = theme
+        try:
+            (settings.DATA_DIR / "theme.txt").write_text(theme, encoding="utf-8")
+        except Exception:
+            pass
+
+        # QSS-Pfad bestimmen (Onefile kompatibel)
+        def qss_path(name: str) -> Path:
+            base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+            # dev:  .../sshupdater/ (ui_config.py liegt in diesem Ordner)
+            # prod: _MEIPASS enthält 'assets/qss'
+            dev_path = Path(__file__).resolve().parent / "assets" / "qss" / f"{name}.qss"
+            bundled = base / "assets" / "qss" / f"{name}.qss"
+            return bundled if bundled.exists() else dev_path
+
+        app = QtWidgets.QApplication.instance()
+        app.setStyleSheet("")  # altes Stylesheet vollständig entfernen
+        if theme in ("light", "dark", "colour"):
+            qss = qss_path(theme)
+            if qss.exists():
+                app.setStyleSheet(qss.read_text(encoding="utf-8"))
+                return
+
+        # Standard oder QSS nicht gefunden -> neutrales helles Fallback
+        app.setStyleSheet("""
+            QWidget { background-color: #f0f0f0; color: #000; font-family: DejaVu Sans, Arial; font-size: 10pt; }
+            QPushButton { background-color: #e0e0e0; border: 1px solid #a0a0a0; padding: 4px 8px; }
+            QPushButton:hover { background-color: #f8f8f8; }
+        """)

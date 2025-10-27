@@ -1,23 +1,12 @@
-#!/bin/bash
-# -------------------------------------
-# SSH-Updater – Entwicklungsstartskript
-# -------------------------------------
+#!/usr/bin/env bash
+set -e
+cd "$(dirname "$0")"
 
-# Virtuelle Umgebung erstellen (falls noch nicht vorhanden)
-if [ ! -d ".venv" ]; then
-  echo "Erstelle virtuelle Umgebung ..."
-  python3 -m venv .venv
-fi
-
-# Aktivieren
+echo "Prüfe Python-Abhängigkeiten ..."
 source .venv/bin/activate
 
-# Abhängigkeiten prüfen (nur bei Bedarf)
-if [ -f "requirements.txt" ]; then
-  echo "Prüfe Python-Abhängigkeiten ..."
-  pip install -r requirements.txt --quiet --upgrade-strategy only-if-needed
-fi
+# Wichtig: Paketpfad bekannt machen
+export PYTHONPATH="src"
 
-# Start der App
 echo "Starte SSH-Updater ..."
-python -m src.sshupdater.app
+python -m sshupdater.app

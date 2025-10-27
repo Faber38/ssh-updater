@@ -1,4 +1,11 @@
 # SSH Updater
+<p align="center">
+  <img src="src/sshupdater/assets/icon.png" alt="SSH Updater Icon" width="120"/>
+</p>
+
+# SSH Updater
+Ein grafisches Tool zum Verwalten und Aktualisieren von SSH-Servern.
+
 
 Ein **Qt/PyQt6-Tool**, um mehrere Linux-Clients/VMs auf in einem Netzwerk per SSH zu prüfen, zu simulieren und Updates auszuführen.Anzeige von Online/offline sowie zählen der Pakete des Updates.
 

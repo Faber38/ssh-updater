@@ -20,8 +20,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_clean  = QtGui.QAction("Bereinigen", self)
         self.act_reboot = QtGui.QAction("Reboot", self)
         self.act_config = QtGui.QAction("Konfiguration", self)
-        self.act_import = QtGui.QAction("Import von Proxmox", self)
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             tb.addAction(a)
 
         # Klick-Handler
@@ -84,10 +83,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_theme(self):
         # Falls du Standard-Theme willst, diesen Block leeren/entfernen
-        qss = Path(__file__).resolve().parents[1] / "assets" / "qss" / "dark.qss"
-        if qss.exists():
-            self.setStyleSheet(qss.read_text(encoding="utf-8"))
-
+        #qss = Path(__file__).resolve().parents[1] / "assets" / "qss" / "dark.qss"
+        #if qss.exists():
+        #    self.setStyleSheet(qss.read_text(encoding="utf-8"))
+        pass
+    
     def _open_config(self):
         from .ui_config import ConfigDialog
         dlg = ConfigDialog(self)
@@ -132,13 +132,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ========= Prüfen: Worker-Thread + Slots =========
     def _on_check(self):
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(False)
 
         selected = self._get_selected_host_ids()
         if not selected:
             QtWidgets.QMessageBox.information(self, "Keine Auswahl", "Bitte zuerst Hosts auswählen (Haken setzen).")
-            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
                 a.setEnabled(True)
             return
 
@@ -189,18 +189,18 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_check_done(self):
         self.log.append("\nFertig.")
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(True)
 
     # ========= Simulieren =========
     def _on_sim(self):
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(False)
 
         selected = self._get_selected_host_ids()
         if not selected:
             QtWidgets.QMessageBox.information(self, "Keine Auswahl", "Bitte zuerst Hosts auswählen (Haken setzen).")
-            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
                 a.setEnabled(True)
             return
 
@@ -233,7 +233,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_sim_done(self):
         self.log.append("\nFertig.")
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(True)
 
     # ========= Upgraden =========
@@ -249,13 +249,13 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         # Buttons sperren
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(False)
 
         selected = self._get_selected_host_ids()
         if not selected:
             QtWidgets.QMessageBox.information(self, "Keine Auswahl", "Bitte zuerst Hosts auswählen (Haken setzen).")
-            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
                 a.setEnabled(True)
             return
 
@@ -294,7 +294,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_upgrade_done(self):
         self.log.append("\nAlle Upgrades beendet.")
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(True)
 
     # ========= Bereinigen ==========
@@ -308,7 +308,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clean_selected = selected 
 
         # Buttons sperren
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import, self.act_clean):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(False)
 
         self.log.clear()
@@ -341,7 +341,7 @@ class MainWindow(QtWidgets.QMainWindow):
         sel = getattr(self, "_clean_selected", [])
         if not sel:
             self.log.append("\nAbgebrochen (keine Auswahl).")
-            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import, self.act_clean):
+            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
                 a.setEnabled(True)
             return
 
@@ -352,7 +352,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if ret != QtWidgets.QMessageBox.StandardButton.Yes:
             self.log.append("\nAbgebrochen.")
-            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import, self.act_clean):
+            for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
                 a.setEnabled(True)
             return
 
@@ -377,7 +377,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_clean_done(self):
         self.log.append("\nBereinigung beendet.")
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import, self.act_clean):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(True)
         self._clean_selected = []
 
@@ -399,7 +399,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         # Buttons sperren
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(False)
 
         self.log.clear()
@@ -419,7 +419,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_reboot_done(self):
         self.log.append("\nReboot-Befehle abgesetzt.")
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config, self.act_import):
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             a.setEnabled(True)
    
 
