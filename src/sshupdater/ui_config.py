@@ -2,8 +2,20 @@ from __future__ import annotations
 from pathlib import Path
 from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QTableWidget, QTableWidgetItem,
-    QMessageBox, QFormLayout, QLineEdit, QComboBox, QSpinBox, QFileDialog, QWidget, QLabel
+    QDialog,
+    QVBoxLayout,
+    QHBoxLayout,
+    QPushButton,
+    QTableWidget,
+    QTableWidgetItem,
+    QMessageBox,
+    QFormLayout,
+    QLineEdit,
+    QComboBox,
+    QSpinBox,
+    QFileDialog,
+    QWidget,
+    QLabel,
 )
 from .core import db, settings
 
@@ -18,15 +30,22 @@ class HostEditDialog(QDialog):
         form = QFormLayout()
         self.in_name = QLineEdit(self._host.get("name", ""))
         self.in_ip = QLineEdit(self._host.get("primary_ip", ""))
-        self.in_port = QSpinBox(); self.in_port.setRange(1, 65535); self.in_port.setValue(self._host.get("port", 22) or 22)
+        self.in_port = QSpinBox()
+        self.in_port.setRange(1, 65535)
+        self.in_port.setValue(self._host.get("port", 22) or 22)
         self.in_user = QLineEdit(self._host.get("user", ""))
-        self.in_auth = QComboBox(); self.in_auth.addItems(["key","password"])
+        self.in_auth = QComboBox()
+        self.in_auth.addItems(["key", "password"])
         self.in_auth.setCurrentText(self._host.get("auth_method", "key"))
         self.in_key = QLineEdit(self._host.get("key_path", "") or "")
-        btn_key = QPushButton("…"); btn_key.clicked.connect(self._choose_key)
-        key_row = QHBoxLayout(); key_row.addWidget(self.in_key, 1); key_row.addWidget(btn_key)
+        btn_key = QPushButton("…")
+        btn_key.clicked.connect(self._choose_key)
+        key_row = QHBoxLayout()
+        key_row.addWidget(self.in_key, 1)
+        key_row.addWidget(btn_key)
 
-        self.in_pwd = QLineEdit(); self.in_pwd.setEchoMode(QLineEdit.EchoMode.Password)
+        self.in_pwd = QLineEdit()
+        self.in_pwd.setEchoMode(QLineEdit.EchoMode.Password)
         if host:
             # Passwort-Feld leer lassen; wird nur gesetzt wenn geändert
             self.in_pwd.setPlaceholderText("Unverändert lassen, wenn leer")
@@ -40,7 +59,9 @@ class HostEditDialog(QDialog):
         form.addRow("Auth-Methode", self.in_auth)
         form.addRow("Key-Pfad", QWidget())
         # Hack: vorherige Zeile für Label, jetzt den Key-Editor platzieren
-        form.itemAt(form.rowCount()-1, QFormLayout.ItemRole.FieldRole).widget().setLayout(key_row)
+        form.itemAt(
+            form.rowCount() - 1, QFormLayout.ItemRole.FieldRole
+        ).widget().setLayout(key_row)
         form.addRow("Passwort", self.in_pwd)
         lay.addLayout(form)
 
@@ -50,13 +71,18 @@ class HostEditDialog(QDialog):
 
         btns = QHBoxLayout()
         btns.addStretch(1)
-        b_cancel = QPushButton("Abbrechen"); b_ok = QPushButton("Speichern")
-        b_cancel.clicked.connect(self.reject); b_ok.clicked.connect(self._save)
-        btns.addWidget(b_cancel); btns.addWidget(b_ok)
+        b_cancel = QPushButton("Abbrechen")
+        b_ok = QPushButton("Speichern")
+        b_cancel.clicked.connect(self.reject)
+        b_ok.clicked.connect(self._save)
+        btns.addWidget(b_cancel)
+        btns.addWidget(b_ok)
         lay.addLayout(btns)
 
     def _choose_key(self):
-        path, _ = QFileDialog.getOpenFileName(self, "SSH Private Key wählen", "", "Keys (*)")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "SSH Private Key wählen", "", "Keys (*)"
+        )
         if path:
             self.in_key.setText(path)
 
@@ -65,7 +91,11 @@ class HostEditDialog(QDialog):
         ip = self.in_ip.text().strip()
         user = self.in_user.text().strip()
         if not name or not ip or not user:
-            QMessageBox.warning(self, "Fehlende Angaben", "Name, Primär-IP/Host und User sind Pflichtfelder.")
+            QMessageBox.warning(
+                self,
+                "Fehlende Angaben",
+                "Name, Primär-IP/Host und User sind Pflichtfelder.",
+            )
             return
         self.result_host = {
             "id": self._host.get("id"),
@@ -82,6 +112,7 @@ class HostEditDialog(QDialog):
         }
         self.accept()
 
+
 class ConfigDialog(QDialog):
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
@@ -91,9 +122,15 @@ class ConfigDialog(QDialog):
 
         # Table
         self.table = QTableWidget(0, 6, self)
-        self.table.setHorizontalHeaderLabels(["Name","Primär-IP","Port","User","Auth","Key-Pfad"])
-        self.table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setHorizontalHeaderLabels(
+            ["Name", "Primär-IP", "Port", "User", "Auth", "Key-Pfad"]
+        )
+        self.table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.table.setEditTriggers(
+            QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
+        )
         self.table.horizontalHeader().setStretchLastSection(True)
         lay.addWidget(self.table, 1)
 
@@ -104,22 +141,28 @@ class ConfigDialog(QDialog):
         self.cmb_theme = QComboBox()
         self.cmb_theme.addItems(["Hell", "Dunkel", "Standard", "Colour"])
 
-        # aktuellen Wert aus settings vorwählen
-        cur = getattr(settings, "THEME", "standard").lower()
+        # aktuellen Wert aus QSettings (Fallback: settings.THEME)
+        qs = QtCore.QSettings("Faber38", "SSH Updater")
+        cur = (
+            qs.value("ui/theme", getattr(settings, "THEME", "standard")) or "standard"
+        ).lower()
         index_map = {"light": 0, "dark": 1, "standard": 2, "colour": 3}
         self.cmb_theme.setCurrentIndex(index_map.get(cur, 2))
 
         row_theme.addWidget(self.cmb_theme, 1)
         lay.addLayout(row_theme)
-        self.cmb_theme.currentIndexChanged.connect(lambda *_: self._apply_theme_choice())
-
+        self.cmb_theme.currentIndexChanged.connect(
+            lambda *_: self._apply_theme_choice()
+        )
 
         # Buttons
         btns = QHBoxLayout()
         self.b_add = QPushButton("Hinzufügen")
         self.b_edit = QPushButton("Bearbeiten")
         self.b_del = QPushButton("Löschen")
-        btns.addWidget(self.b_add); btns.addWidget(self.b_edit); btns.addWidget(self.b_del)
+        btns.addWidget(self.b_add)
+        btns.addWidget(self.b_edit)
+        btns.addWidget(self.b_del)
         btns.addStretch(1)
         self.b_close = QPushButton("Schließen")
         btns.addWidget(self.b_close)
@@ -208,10 +251,14 @@ class ConfigDialog(QDialog):
         if not hid:
             QMessageBox.information(self, "Hinweis", "Bitte einen Host auswählen.")
             return
-        if QMessageBox.question(self, "Löschen", "Diesen Host wirklich löschen?") == QMessageBox.StandardButton.Yes:
+        if (
+            QMessageBox.question(self, "Löschen", "Diesen Host wirklich löschen?")
+            == QMessageBox.StandardButton.Yes
+        ):
             con = db._connect()
             con.execute("DELETE FROM hosts WHERE id=?", (hid,))
-            con.commit(); con.close()
+            con.commit()
+            con.close()
             self._reload()
 
     def _apply_theme_choice(self):
@@ -225,6 +272,8 @@ class ConfigDialog(QDialog):
 
         # in settings merken + persistent speichern
         settings.THEME = theme
+        QtCore.QSettings("Faber38", "SSH Updater").setValue("ui/theme", theme)
+
         try:
             (settings.DATA_DIR / "theme.txt").write_text(theme, encoding="utf-8")
         except Exception:
@@ -235,7 +284,9 @@ class ConfigDialog(QDialog):
             base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
             # dev:  .../sshupdater/ (ui_config.py liegt in diesem Ordner)
             # prod: _MEIPASS enthält 'assets/qss'
-            dev_path = Path(__file__).resolve().parent / "assets" / "qss" / f"{name}.qss"
+            dev_path = (
+                Path(__file__).resolve().parent / "assets" / "qss" / f"{name}.qss"
+            )
             bundled = base / "assets" / "qss" / f"{name}.qss"
             return bundled if bundled.exists() else dev_path
 
@@ -244,12 +295,31 @@ class ConfigDialog(QDialog):
         if theme in ("light", "dark", "colour"):
             qss = qss_path(theme)
             if qss.exists():
-                app.setStyleSheet(qss.read_text(encoding="utf-8"))
-                return
+               app.setStyleSheet(qss.read_text(encoding="utf-8"))
+
+               # Hauptfenster live aktualisieren
+               par = self.parent()
+               if par and hasattr(par, "_apply_theme"):
+                    try:
+                       par._apply_theme()
+                    except Exception:
+                        pass
+            return
+
 
         # Standard oder QSS nicht gefunden -> neutrales helles Fallback
-        app.setStyleSheet("""
+        app.setStyleSheet(
+            """
             QWidget { background-color: #f0f0f0; color: #000; font-family: DejaVu Sans, Arial; font-size: 10pt; }
             QPushButton { background-color: #e0e0e0; border: 1px solid #a0a0a0; padding: 4px 8px; }
             QPushButton:hover { background-color: #f8f8f8; }
-        """)
+        """
+        )
+
+        # Hauptfenster live aktualisieren (falls Dialog mit Parent geöffnet)
+        par = self.parent()
+        if par and hasattr(par, "_apply_theme"):
+            try:
+                par._apply_theme()
+            except Exception:
+                pass

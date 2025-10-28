@@ -14,4 +14,13 @@ logging.basicConfig(
 
 DB_PATH = DATA_DIR / "app.db"
 CONFIG_ENC = DATA_DIR / "config.enc"
-THEME = "light"  # "dark" | "light" | "colour"
+
+# Theme aus gespeicherter Datei lesen, falls vorhanden
+_theme_file = DATA_DIR / "theme.txt"
+if _theme_file.exists():
+    try:
+        THEME = _theme_file.read_text(encoding="utf-8").strip().lower()
+    except Exception:
+        THEME = "light"
+else:
+    THEME = "light"  # Fallback-Theme
