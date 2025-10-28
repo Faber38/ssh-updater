@@ -1,7 +1,184 @@
+import os, platform, socket, shutil, subprocess
 from PyQt6 import QtWidgets, QtGui, QtCore
 from pathlib import Path
 from datetime import datetime
 
+class SysInfoWidget(QtWidgets.QFrame):
+    """Zeigt lokale Systeminformationen an (Host, OS, Kernel, Uptime, Load, RAM, Disk, IPs)."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
+        lay = QtWidgets.QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        # Schöner Stil: kleinere Schrift, dezente Farben
+        self.setStyleSheet("""
+            QFrame {
+                background-color: #fafafa;
+                border: 1px solid #ccc;
+                border-radius: 8px;
+            }
+            QLabel {
+                font-size: 8pt;
+                color: #444;
+            }
+            QLabel.title {
+                font-size: 11pt;
+                font-weight: bold;
+                color: #202020;
+                padding-bottom: 4px;
+            }
+            QLabel.key {
+                color: #666;
+                font-weight: normal;
+            }
+            QLabel.value {
+                color: #000;
+                font-weight: bold;
+            }
+        """)
+
+        # Überschrift
+        title = QtWidgets.QLabel("Systeminfo (lokal)")
+        title.setProperty("class", "title")
+        lay.addWidget(title)
+
+        # Layout für Key/Value-Paare
+        grid = QtWidgets.QGridLayout()
+        grid.setVerticalSpacing(4)
+        grid.setHorizontalSpacing(10)
+        lay.addLayout(grid)
+
+        def kv_row(row, key_text):
+            lab_k = QtWidgets.QLabel(key_text)
+            lab_k.setProperty("class", "key")
+            lab_v = QtWidgets.QLabel("–")
+            lab_v.setProperty("class", "value")
+            grid.addWidget(lab_k, row, 0)
+            grid.addWidget(lab_v, row, 1)
+            return lab_v
+
+        self.lab_host   = kv_row(0, "Hostname:")
+        self.lab_os     = kv_row(1, "OS:")
+        self.lab_kernel = kv_row(2, "Kernel:")
+        self.lab_uptime = kv_row(3, "Uptime:")
+        self.lab_load   = kv_row(4, "Load:")
+        self.lab_mem    = kv_row(5, "RAM:")
+        self.lab_disk   = kv_row(6, "Root-Disk:")
+        self.lab_ip     = kv_row(7, "IP(s):")
+
+        lay.addSpacing(6)
+        btn_row = QtWidgets.QHBoxLayout(); lay.addLayout(btn_row)
+        self.btn_refresh = QtWidgets.QPushButton("Aktualisieren")
+        btn_row.addStretch(1); btn_row.addWidget(self.btn_refresh)
+        self.btn_refresh.clicked.connect(self.refresh)
+
+        lay.addStretch(1)
+
+
+        # Auto-Refresh alle 5s
+        self._timer = QtCore.QTimer(self)
+        self._timer.timeout.connect(self.refresh)
+        self._timer.start(5000)
+
+        self.refresh()  # initial
+
+    # -------- Helpers --------
+    def _read_os_release(self) -> str:
+        p = Path("/etc/os-release")
+        if p.exists():
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+            for line in txt.splitlines():
+                if line.startswith("PRETTY_NAME="):
+                    return line.split("=",1)[1].strip().strip('"')
+        return platform.system()
+
+    def _uptime_str(self) -> str:
+        try:
+            with open("/proc/uptime","r") as f:
+                secs = float(f.read().split()[0])
+            mins, sec = divmod(int(secs), 60)
+            hrs, mins = divmod(mins, 60)
+            days, hrs = divmod(hrs, 24)
+            parts = []
+            if days: parts.append(f"{days} Tage")
+            if hrs:  parts.append(f"{hrs} Std")
+            if mins: parts.append(f"{mins} Min")
+            return " ".join(parts) or f"{sec}s"
+        except Exception:
+            return "–"
+
+    def _mem_str(self) -> str:
+        try:
+            meminfo = Path("/proc/meminfo").read_text().splitlines()
+            kv = {}
+            for line in meminfo:
+                k, v = line.split(":",1)
+                kv[k.strip()] = v.strip()
+            def _kb(v): return int(v.split()[0])
+            total = _kb(kv["MemTotal"])*1024
+            avail = _kb(kv.get("MemAvailable", kv["MemFree"]))*1024
+            used = total - avail
+            def fmt(b):
+                for unit in ("B","KiB","MiB","GiB","TiB"):
+                    if b < 1024 or unit == "TiB": break
+                    b /= 1024.0
+                return f"{b:.1f} {unit}"
+            return f"{fmt(used)} / {fmt(total)}"
+        except Exception:
+            return "–"
+
+    def _disk_root_str(self) -> str:
+        try:
+            total, used, free = shutil.disk_usage("/")
+            def fmt(b):
+                for unit in ("B","GiB","TiB","PiB"):
+                    if b < (1024**3) or unit != "B": break
+                # einfache GiB-Ausgabe:
+                return f"{b/1024**3:.1f} GiB"
+            pct = used/total*100 if total else 0
+            return f"{fmt(used)} / {fmt(total)}  ({pct:.0f} %)"
+        except Exception:
+            return "–"
+
+    def _ips_str(self) -> str:
+        # robuste IP-Ermittlung über `ip -4 addr`
+        try:
+            out = subprocess.check_output(["ip","-4","addr"], text=True, errors="ignore")
+            ips = []
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("inet "):
+                    ip = line.split()[1].split("/")[0]
+                    if not ip.startswith("127."):
+                        ips.append(ip)
+            return ", ".join(ips) if ips else "–"
+        except Exception:
+            return "–"
+
+    def refresh(self):
+        try:
+            host = socket.gethostname()
+        except Exception:
+            host = "–"
+        os_name = self._read_os_release()
+        kernel  = platform.release()
+        uptime  = self._uptime_str()
+        load    = " / ".join(f"{v:.2f}" for v in os.getloadavg()) if hasattr(os, "getloadavg") else "–"
+        mem     = self._mem_str()
+        disk    = self._disk_root_str()
+        ips     = self._ips_str()
+
+        self.lab_host.setText(f"Hostname: <b>{host}</b>")
+        self.lab_os.setText(f"OS: {os_name}")
+        self.lab_kernel.setText(f"Kernel: {kernel}")
+        self.lab_uptime.setText(f"Uptime: {uptime}")
+        self.lab_load.setText(f"Load: {load}")
+        self.lab_mem.setText(f"RAM: {mem}")
+        self.lab_disk.setText(f"Root-Disk: {disk}")
+        self.lab_ip.setText(f"IP(s): {ips}")
 
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
@@ -36,11 +213,9 @@ class MainWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         main = QtWidgets.QHBoxLayout(central)
 
-        left = QtWidgets.QFrame()
-        left.setFixedWidth(240)
-        left.setLayout(QtWidgets.QVBoxLayout())
-        left.layout().addWidget(QtWidgets.QLabel("Filter (Stub)"))
-        left.layout().addStretch(1)
+        # ---- links: Systeminfo 
+        left = SysInfoWidget()
+        left.setFixedWidth(320)
 
         self.table = QtWidgets.QTableView()
         self._reload_hosts()
