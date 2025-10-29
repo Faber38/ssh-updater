@@ -245,15 +245,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_clean = QtGui.QAction("Bereinigen", self)
         self.act_reboot = QtGui.QAction("Reboot", self)
         self.act_config = QtGui.QAction("Konfiguration", self)
-        for a in (
-            self.act_check,
-            self.act_sim,
-            self.act_upg,
-            self.act_clean,
-            self.act_reboot,
-            self.act_config,
-        ):
+        self.act_toggle_checks = QtGui.QAction("Haken", self)
+        self.act_toggle_checks.setToolTip("Alle auswählen/abwählen")
+        self.act_toggle_checks.setCheckable(True)               # <- wichtig
+        self.act_toggle_checks.setIcon(self._make_dot_icon("#3a7cec"))
+
+        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
             tb.addAction(a)
+        tb.addSeparator()
+        tb.addAction(self.act_toggle_checks)
 
         # Klick-Handler
         self.act_config.triggered.connect(self._open_config)
@@ -262,6 +262,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_upg.triggered.connect(self._on_upgrade)
         self.act_clean.triggered.connect(self._on_clean)
         self.act_reboot.triggered.connect(self._on_reboot)
+        self.act_toggle_checks.toggled.connect(self._on_toggle_checks)
 
         # Zentraler Bereich: resizable via QSplitter
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
@@ -348,7 +349,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_theme(self):
         # 1) Theme aus QSettings lesen, 2) Fallback auf settings.THEME
-        q_theme = QtCore.QSettings("Faber38", "SSH Updater").value("ui/theme", None)
+        q_theme = QtCore.QSettings(
+            "Faber38", "SSH Updater").value("ui/theme", None)
         theme = (q_theme or settings.THEME or "standard").lower()
 
         # QSS-Datei anhand theme wählen
@@ -458,7 +460,8 @@ class MainWindow(QtWidgets.QMainWindow):
             online = True
             updates = int(res.get("updates", 0))
         else:
-            self.log.append(f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(
+                f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
             online = False
             updates = None
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
@@ -479,7 +482,8 @@ class MainWindow(QtWidgets.QMainWindow):
             model.setItem(row, 5, status_item)  # Spalte "Status"
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            model.setItem(row, 6, QtGui.QStandardItem(timestamp))  # "Letzte Prüfung"
+            model.setItem(row, 6, QtGui.QStandardItem(
+                timestamp))  # "Letzte Prüfung"
 
             # in DB persistieren
             try:
@@ -550,11 +554,13 @@ class MainWindow(QtWidgets.QMainWindow):
                 if preview:
                     self.log.append(preview)
                     if len(lines) > 20:
-                        self.log.append(f"... ({len(lines)-20} weitere Zeilen)\n")
+                        self.log.append(
+                            f"... ({len(lines)-20} weitere Zeilen)\n")
                 else:
                     self.log.append("(keine Details)\n")
         else:
-            self.log.append(f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(
+                f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_sim_done(self):
@@ -645,7 +651,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
         else:
-            self.log.append(f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(
+                f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_upgrade_done(self):
@@ -710,7 +717,8 @@ class MainWindow(QtWidgets.QMainWindow):
                         )
                     )
         else:
-            self.log.append(f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(
+                f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_sim_done(self):
@@ -769,7 +777,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if res.get("status") == "ok":
             self.log.append(f"✅ {res['name']}: Autoremove abgeschlossen.")
         else:
-            self.log.append(f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(
+                f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_done(self):
@@ -826,9 +835,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_reboot_host_done(self, res: dict):
         if res.get("status") == "ok":
-            self.log.append(f"🔁 {res['name']}: {res.get('note', 'Reboot ausgelöst')}")
+            self.log.append(
+                f"🔁 {res['name']}: {res.get('note', 'Reboot ausgelöst')}")
         else:
-            self.log.append(f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(
+                f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_reboot_done(self):
@@ -894,6 +905,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setModel(model)
         self.table.resizeColumnsToContents()
         self.table.setColumnWidth(0, 30)
+        self._sync_toggle_action()
 
     def closeEvent(self, event):
         try:
@@ -905,6 +917,40 @@ class MainWindow(QtWidgets.QMainWindow):
                 self._qset.setValue("ui/splitter_sizes", splitter.sizes())
         finally:
             super().closeEvent(event)
+
+    def _set_all_checks(self, state: bool):
+        model = self.table.model()
+        if not model:
+            return
+        target = QtCore.Qt.CheckState.Checked if state else QtCore.Qt.CheckState.Unchecked
+        for r in range(model.rowCount()):
+            item = model.item(r, 0)
+            if item is not None:
+                item.setCheckState(target)
+        # Button-Zustand nachziehen
+        self._sync_toggle_action()
+
+    def _are_all_checked(self) -> bool:
+        model = self.table.model()
+        if not model or model.rowCount() == 0:
+            return False
+        for r in range(model.rowCount()):
+            item = model.item(r, 0)
+            if item is None or item.checkState() != QtCore.Qt.CheckState.Checked:
+                return False
+        return True
+
+    # NEU: Slot für die Toolbar-Aktion (nimmt das bool von 'toggled')
+    def _on_toggle_checks(self, checked: bool):
+        self._set_all_checks(checked)
+
+    # NEU: hält die Toolbar-Aktion in Sync mit der Tabelle
+    def _sync_toggle_action(self):
+        if hasattr(self, "act_toggle_checks"):
+            self.act_toggle_checks.blockSignals(True)
+            self.act_toggle_checks.setChecked(self._are_all_checked())
+            self.act_toggle_checks.blockSignals(False)
+
 
 
 class _CheckWorker(QtCore.QThread):
@@ -921,7 +967,8 @@ class _CheckWorker(QtCore.QThread):
 
         # Lade Hosts aus DB (alle) und filtere ggf.
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
+                 in self.host_ids]
 
         async def _job():
             for h in hosts:
@@ -958,7 +1005,8 @@ class _SimWorker(QtCore.QThread):
         import traceback
 
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
+                 in self.host_ids]
 
         async def _job():
             for h in hosts:
@@ -1022,7 +1070,8 @@ class _UpgradeWorker(QtCore.QThread):
 
         # Hosts aus DB laden und ggf. auf Auswahl filtern
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
+                 in self.host_ids]
 
         async def _job():
             for h in hosts:
@@ -1044,7 +1093,8 @@ class _UpgradeWorker(QtCore.QThread):
                         if not isinstance(msg, dict):
                             continue
                         if msg.get("type") == "line":
-                            self.progress.emit({"name": name, "line": msg["line"]})
+                            self.progress.emit(
+                                {"name": name, "line": msg["line"]})
                         elif msg.get("type") == "result":
                             res = msg["result"] or {}
                             res.update({"host_id": h["id"], "name": name})
@@ -1111,7 +1161,8 @@ class _CleanRunWorker(QtCore.QThread):
                     agen = ssh_client.autoremove_host_stream(h)
                     async for msg in agen:
                         if isinstance(msg, dict) and msg.get("type") == "line":
-                            self.progress.emit({"name": name, "line": msg["line"]})
+                            self.progress.emit(
+                                {"name": name, "line": msg["line"]})
                         elif isinstance(msg, dict) and msg.get("type") == "result":
                             res = msg["result"] or {}
                             res.update({"host_id": h["id"], "name": name})
@@ -1144,7 +1195,8 @@ class _RebootWorker(QtCore.QThread):
         import traceback
 
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
+                 in self.host_ids]
 
         async def _job():
             for h in hosts:
