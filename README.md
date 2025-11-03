@@ -63,7 +63,7 @@ Oder als **Standalone-Build**:
 ---
 
 ## 📌 Roadmap
-- Parallel-SSH-Ausführung (gleichzeitige Updates mehrerer Hosts)  
+- Der SSH-Updater soll auch headless auf dem Proxmox-Host laufen.  
 - Log-Archivierung und Export  
 - Optionale Statusmeldungen via Telegram  
 
