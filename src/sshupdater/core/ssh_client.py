@@ -189,13 +189,24 @@ async def _stream(conn, cmd: str, timeout: int = 0):
     # kein return in async generatoren
     yield f"[RC={rc}]"
 
-async def _upgrade_debian(conn):
-    # Paketlisten
-    async for _ in _stream(conn, "sudo -n apt-get update -y -o=Dpkg::Use-Pty=0"):
+async def _upgrade_debian(conn, use_sudo: bool):
+    prefix = "sudo -n " if use_sudo else ""
+
+    # Paketlisten aktualisieren
+    async for _ in _stream(
+        conn,
+        f"{prefix}apt-get update -y -o=Dpkg::Use-Pty=0"
+    ):
         pass
+
     # Upgrade streamen
-    async for line in _stream(conn, "sudo -n DEBIAN_FRONTEND=noninteractive apt-get -y dist-upgrade -o=Dpkg::Use-Pty=0"):
+    cmd = (
+        f"{prefix}DEBIAN_FRONTEND=noninteractive "
+        "apt-get -y dist-upgrade -o=Dpkg::Use-Pty=0"
+    )
+    async for line in _stream(conn, cmd):
         yield line
+
 
 async def _upgrade_rpm(conn):
     async for line in _stream(conn, "sudo -n dnf -y upgrade --refresh"):
@@ -224,8 +235,10 @@ async def upgrade_host_stream(host: Dict[str, Any]):
     try:
         async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
             distro = await _detect_distro(conn)
+            # nur sudo verwenden, wenn wir NICHT als root eingeloggt sind
+            use_sudo = (user != "root")
             if distro == "debian":
-                gen = _upgrade_debian(conn)
+                gen = _upgrade_debian(conn, use_sudo)
             elif distro == "rpm":
                 gen = _upgrade_rpm(conn)
             elif distro == "arch":
