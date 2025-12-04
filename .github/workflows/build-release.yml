@@ -26,10 +26,10 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          # Wir bauen direkt aus dem Repo mit der vorhandenen spec-Datei
-          ls -l
-          pyinstaller ssh-updater.spec
-          ls -R dist
+          cd $GITHUB_WORKSPACE
+          echo "📦 Building SSH Updater..."
+          ls -la
+          pyinstaller ssh-updater.spec --noconfirm
 
       - name: Create archive
         run: |
