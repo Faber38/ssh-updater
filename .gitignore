@@ -17,7 +17,7 @@ htmlcov/
 # --- Builds / Distribution ---
 build/
 dist/
-*.spec
+# *.spec
 pip-wheel-metadata/
 
 # --- Virtual Envs ---
