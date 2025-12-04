@@ -3,7 +3,7 @@ name: Build and Release SSH Updater
 on:
   push:
     tags:
-      - "v1.0.0"   # z.B. v0.3.0, v1.0.0
+      - "v*"
 
 jobs:
   build-linux:
@@ -24,15 +24,19 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build with PyInstaller (run_erstelle.sh)
+      - name: Build with PyInstaller
         run: |
-          chmod +x run_erstelle.sh
-          ./run_erstelle.sh
+          # Wir bauen direkt aus dem Repo mit der vorhandenen spec-Datei
+          ls -l
+          pyinstaller ssh-updater.spec
+          ls -R dist
 
       - name: Create archive
         run: |
           cd dist
+          # hier liegt dein Binary, ggf. Pfad anpassen falls anders
           tar czf ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz ssh-updater
+          ls -l
 
       - name: Create GitHub Release and upload asset
         uses: softprops/action-gh-release@v2
