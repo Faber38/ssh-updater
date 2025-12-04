@@ -9,6 +9,7 @@ permissions:
   contents: write
 
 jobs:
+  # ---------- Linux-Build ----------
   build-linux:
     runs-on: ubuntu-latest
 
@@ -27,50 +28,83 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
-      - name: Build with PyInstaller
+      - name: Build with PyInstaller (Linux)
         run: |
+          cd $GITHUB_WORKSPACE
+          echo "📦 Building SSH Updater (Linux)..."
           pyinstaller ssh-updater.spec --noconfirm
+          ls -R .
 
-      - name: Create archive (Linux)
+      - name: Create Linux archive
         run: |
           cd dist
           tar czf ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz ssh-updater
+          ls -l
 
-      - name: Upload Linux asset to Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: dist/ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: ssh-updater-linux
+          path: dist/ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz
 
+  # ---------- Windows-Build ----------
   build-windows:
     runs-on: windows-latest
 
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pyinstaller
 
       - name: Build Windows EXE
         run: |
+          echo "📦 Building SSH Updater (Windows)..."
           pyinstaller ssh-updater.spec --noconfirm
+          dir
 
-      - name: Create ZIP (Windows)
+      - name: Create Windows ZIP
         run: |
-          powershell Compress-Archive -Path dist\ssh-updater\* -DestinationPath dist\ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
+          cd dist
+          powershell -Command "Compress-Archive -Path 'ssh-updater\*' -DestinationPath 'ssh-updater-${{ github.ref_name }}-windows-x86_64.zip'"
+          dir
 
-      - name: Upload Windows asset to Release
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-updater-windows
+          path: dist/ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
+
+  # ---------- Release erstellen & Assets anhängen ----------
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: List downloaded files
+        run: |
+          echo "📁 Downloaded artifacts:"
+          ls -R dist
+
+      - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
+          files: |
+            dist/ssh-updater-linux/ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz
+            dist/ssh-updater-windows/ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
