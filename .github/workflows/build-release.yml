@@ -75,7 +75,9 @@ jobs:
       - name: Create Windows ZIP
         run: |
           cd dist
-          powershell -Command "Compress-Archive -Path 'ssh-updater\*' -DestinationPath 'ssh-updater-${{ github.ref_name }}-windows-x86_64.zip'"
+          echo "📦 Creating Windows ZIP..."
+          dir
+          powershell -Command "Compress-Archive -Path 'ssh-updater.exe' -DestinationPath 'ssh-updater-${{ github.ref_name }}-windows-x86_64.zip'"
           dir
 
       - name: Upload Windows artifact
