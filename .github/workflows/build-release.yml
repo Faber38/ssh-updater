@@ -29,35 +29,31 @@ jobs:
 
       - name: Build with PyInstaller
         run: |
-          cd $GITHUB_WORKSPACE
-          echo "📦 Building SSH Updater..."
-          ls -la
           pyinstaller ssh-updater.spec --noconfirm
 
-      - name: Create archive
+      - name: Create archive (Linux)
         run: |
           cd dist
-          # hier liegt dein Binary, ggf. Pfad anpassen falls anders
           tar czf ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz ssh-updater
-          ls -l
 
-      - name: Create GitHub Release and upload asset
+      - name: Upload Linux asset to Release
         uses: softprops/action-gh-release@v2
         with:
           files: dist/ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          
+
   build-windows:
     runs-on: windows-latest
+
     steps:
-      - name: Check out repository
-        uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |
@@ -68,8 +64,13 @@ jobs:
         run: |
           pyinstaller ssh-updater.spec --noconfirm
 
-      - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+      - name: Create ZIP (Windows)
+        run: |
+          powershell Compress-Archive -Path dist\ssh-updater\* -DestinationPath dist\ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
+
+      - name: Upload Windows asset to Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: ssh-updater-windows
-          path: dist/ssh-updater/**
+          files: dist/ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
