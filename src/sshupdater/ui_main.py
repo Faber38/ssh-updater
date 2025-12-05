@@ -254,6 +254,22 @@ class MainWindow(QtWidgets.QMainWindow):
             tb.addAction(a)
         tb.addSeparator()
         tb.addAction(self.act_toggle_checks)
+        
+        # --- User-Label rechts in der Toolbar (@Faber38) ---
+        spacer = QtWidgets.QWidget()
+        spacer.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        tb.addWidget(spacer)
+
+        self.userLabel = QtWidgets.QLabel(" © Faber38")
+        self.userLabel.setObjectName("userLabel")
+        self.userLabel.setStyleSheet(
+            "font-size: 10pt; font-weight: bold; padding-right: 10px;"
+        )
+        tb.addWidget(self.userLabel)
+
 
         # Klick-Handler
         self.act_config.triggered.connect(self._open_config)
