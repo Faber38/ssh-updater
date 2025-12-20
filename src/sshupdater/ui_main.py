@@ -155,10 +155,7 @@ class SysInfoWidget(QtWidgets.QFrame):
             total, used, free = shutil.disk_usage("/")
 
             def fmt(b):
-                for unit in ("B", "GiB", "TiB", "PiB"):
-                    if b < (1024**3) or unit != "B":
-                        break
-                # einfache GiB-Ausgabe:
+                # einfache GiB-Ausgabe
                 return f"{b/1024**3:.1f} GiB"
 
             pct = used / total * 100 if total else 0
@@ -199,6 +196,7 @@ class SysInfoWidget(QtWidgets.QFrame):
         mem = self._mem_str()
         disk = self._disk_root_str()
         ips = self._ips_str()
+
         # SSH-Dienst prüfen
         try:
             out = subprocess.run(
@@ -247,15 +245,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_config = QtGui.QAction("Konfiguration", self)
         self.act_toggle_checks = QtGui.QAction("Haken", self)
         self.act_toggle_checks.setToolTip("Alle auswählen/abwählen")
-        self.act_toggle_checks.setCheckable(True)               # <- wichtig
+        self.act_toggle_checks.setCheckable(True)  # <- wichtig
         self.act_toggle_checks.setIcon(self._make_dot_icon("#3a7cec"))
 
-        for a in (self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config):
+        for a in (
+            self.act_check,
+            self.act_sim,
+            self.act_upg,
+            self.act_clean,
+            self.act_reboot,
+            self.act_config,
+        ):
             tb.addAction(a)
         tb.addSeparator()
         tb.addAction(self.act_toggle_checks)
-        
-        # --- User-Label rechts in der Toolbar (@Faber38) ---
+
+        # --- User-Label rechts in der Toolbar (Autor-Hinweis) ---
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -269,7 +274,6 @@ class MainWindow(QtWidgets.QMainWindow):
             "font-size: 10pt; font-weight: bold; padding-right: 10px;"
         )
         tb.addWidget(self.userLabel)
-
 
         # Klick-Handler
         self.act_config.triggered.connect(self._open_config)
@@ -288,11 +292,7 @@ class MainWindow(QtWidgets.QMainWindow):
         left.setMinimumWidth(260)  # untere Grenze
         left.setMaximumWidth(600)  # optionale obere Grenze (anpassbar)
 
-        # Rechtes Panel (Tabelle + Log)
-        right = QtWidgets.QWidget()
-        rlay = QtWidgets.QVBoxLayout(right)
-        rlay.setContentsMargins(0, 0, 0, 0)
-
+        # Tabelle
         self.table = QtWidgets.QTableView()
         self._reload_hosts()
         self.table.setSelectionBehavior(
@@ -302,16 +302,20 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
 
+        # Log
         self.log = QtWidgets.QTextEdit()
         self.log.setReadOnly(True)
         self.log.setPlaceholderText("Logs …")
 
-        rlay.addWidget(self.table, 3)
-        rlay.addWidget(self.log, 2)
+        # ✅ Rechter Bereich als vertikaler Splitter (Tabelle/Log verschiebbar)
+        self.right_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.right_splitter.addWidget(self.table)
+        self.right_splitter.addWidget(self.log)
+        self.right_splitter.setSizes([420, 240])  # Startaufteilung
 
         # In den Splitter einsetzen
         splitter.addWidget(left)
-        splitter.addWidget(right)
+        splitter.addWidget(self.right_splitter)
 
         # Dehnung: rechts bekommt den Platz
         splitter.setStretchFactor(0, 0)  # links fix(er)
@@ -322,6 +326,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         # Splitter als zentrales Widget
         self.setCentralWidget(splitter)
+
         # ---- Einstellungen wiederherstellen (Theme, Geometrie, Splitter)
         self._qset = QtCore.QSettings("Faber38", "SSH Updater")
 
@@ -330,7 +335,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if geom is not None:
             self.restoreGeometry(geom)
 
-        # Splitter-Größen
+        # Splitter-Größen (links/rechts)
         sizes = self._qset.value("ui/splitter_sizes", None)
         if sizes:
             try:
@@ -338,9 +343,15 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
-        # Theme aus QSettings anwenden (Fallback auf settings.THEME)
-        self._apply_theme()
+        # ✅ Splitter-Größen rechts (Tabelle/Log)
+        sizes_r = self._qset.value("ui/right_splitter_sizes", None)
+        if sizes_r:
+            try:
+                self.right_splitter.setSizes([int(s) for s in sizes_r])
+            except Exception:
+                pass
 
+        # Theme aus QSettings anwenden (Fallback auf settings.THEME)
         self._apply_theme()
         self.statusBar().showMessage("Bereit")
 
@@ -365,13 +376,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _apply_theme(self):
         # 1) Theme aus QSettings lesen, 2) Fallback auf settings.THEME
-        q_theme = QtCore.QSettings(
-            "Faber38", "SSH Updater").value("ui/theme", None)
+        q_theme = QtCore.QSettings("Faber38", "SSH Updater").value("ui/theme", None)
         theme = (q_theme or settings.THEME or "standard").lower()
 
         # QSS-Datei anhand theme wählen
-        from pathlib import Path
-
         base = Path(__file__).resolve().parents[1]  # src/sshupdater/..
         qss = None
         if theme == "dark":
@@ -476,8 +484,7 @@ class MainWindow(QtWidgets.QMainWindow):
             online = True
             updates = int(res.get("updates", 0))
         else:
-            self.log.append(
-                f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
             online = False
             updates = None
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
@@ -498,8 +505,7 @@ class MainWindow(QtWidgets.QMainWindow):
             model.setItem(row, 5, status_item)  # Spalte "Status"
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            model.setItem(row, 6, QtGui.QStandardItem(
-                timestamp))  # "Letzte Prüfung"
+            model.setItem(row, 6, QtGui.QStandardItem(timestamp))  # "Letzte Prüfung"
 
             # in DB persistieren
             try:
@@ -570,13 +576,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 if preview:
                     self.log.append(preview)
                     if len(lines) > 20:
-                        self.log.append(
-                            f"... ({len(lines)-20} weitere Zeilen)\n")
+                        self.log.append(f"... ({len(lines)-20} weitere Zeilen)\n")
                 else:
                     self.log.append("(keine Details)\n")
         else:
-            self.log.append(
-                f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_sim_done(self):
@@ -657,9 +661,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 model.setItem(
                     row, 5, QtGui.QStandardItem("Online – 0 Updates")
-                )  # Spalte Status
-                # Spalte Letzte Prüfung
-                model.setItem(row, 6, QtGui.QStandardItem(ts))
+                )  # Status
+                model.setItem(row, 6, QtGui.QStandardItem(ts))  # Letzte Prüfung
                 try:
                     from .core import db
 
@@ -667,8 +670,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 except Exception:
                     pass
         else:
-            self.log.append(
-                f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_upgrade_done(self):
@@ -733,8 +735,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         )
                     )
         else:
-            self.log.append(
-                f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(f"✖ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_sim_done(self):
@@ -793,8 +794,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if res.get("status") == "ok":
             self.log.append(f"✅ {res['name']}: Autoremove abgeschlossen.")
         else:
-            self.log.append(
-                f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_done(self):
@@ -813,7 +813,6 @@ class MainWindow(QtWidgets.QMainWindow):
     # ========= reboot =========
 
     def _on_reboot(self):
-        # Auswahl prüfen
         selected = self._get_selected_host_ids()
         if not selected:
             QtWidgets.QMessageBox.information(
@@ -830,7 +829,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if ret != QtWidgets.QMessageBox.StandardButton.Yes:
             return
 
-        # Buttons sperren
         for a in (
             self.act_check,
             self.act_sim,
@@ -851,11 +849,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_reboot_host_done(self, res: dict):
         if res.get("status") == "ok":
-            self.log.append(
-                f"🔁 {res['name']}: {res.get('note', 'Reboot ausgelöst')}")
+            self.log.append(f"🔁 {res['name']}: {res.get('note', 'Reboot ausgelöst')}")
         else:
-            self.log.append(
-                f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
+            self.log.append(f"❌ {res.get('name', '?')}: {res.get('note', 'Fehler')}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_reboot_done(self):
@@ -883,13 +879,11 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         for h in hosts:
-            # Checkbox
             chk = QtGui.QStandardItem()
             chk.setCheckable(True)
             chk.setCheckState(QtCore.Qt.CheckState.Unchecked)
             chk.setEditable(False)
 
-            # Basisfelder
             name = QtGui.QStandardItem(h.get("name") or "")
             name.setData(h["id"], QtCore.Qt.ItemDataRole.UserRole)
 
@@ -897,22 +891,16 @@ class MainWindow(QtWidgets.QMainWindow):
             user = QtGui.QStandardItem(h.get("user") or "")
             auth = QtGui.QStandardItem(h.get("auth_method") or "")
 
-            # Status + Icon
-            pending = h.get("pending_updates")  # kann None sein
+            pending = h.get("pending_updates")
             if pending is None:
-                status_text = "—"
-                status = QtGui.QStandardItem(status_text)
-                # Grau (unklar) – online=True, updates=None -> grau laut _status_icon_for
+                status = QtGui.QStandardItem("—")
                 status.setIcon(self._status_icon_for(True, None))
             else:
-                status_text = f"Online – {int(pending)} Updates"
-                status = QtGui.QStandardItem(status_text)
+                status = QtGui.QStandardItem(f"Online – {int(pending)} Updates")
                 status.setIcon(self._status_icon_for(True, int(pending)))
 
-            # Letzte Prüfung
             last_item = QtGui.QStandardItem(h.get("last_check") or "—")
 
-            # nicht editierbar (außer Checkbox)
             for it in (name, ip, user, auth, status, last_item):
                 it.setEditable(False)
 
@@ -925,12 +913,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def closeEvent(self, event):
         try:
-            # Fenster-Geometrie speichern
             self._qset.setValue("win/geometry", self.saveGeometry())
-            # Splitter-Größen speichern
+
             splitter = self.centralWidget()
             if isinstance(splitter, QtWidgets.QSplitter):
                 self._qset.setValue("ui/splitter_sizes", splitter.sizes())
+
+            # ✅ Rechter Splitter (Tabelle/Log) merken
+            if hasattr(self, "right_splitter"):
+                self._qset.setValue(
+                    "ui/right_splitter_sizes", self.right_splitter.sizes()
+                )
         finally:
             super().closeEvent(event)
 
@@ -938,12 +931,13 @@ class MainWindow(QtWidgets.QMainWindow):
         model = self.table.model()
         if not model:
             return
-        target = QtCore.Qt.CheckState.Checked if state else QtCore.Qt.CheckState.Unchecked
+        target = (
+            QtCore.Qt.CheckState.Checked if state else QtCore.Qt.CheckState.Unchecked
+        )
         for r in range(model.rowCount()):
             item = model.item(r, 0)
             if item is not None:
                 item.setCheckState(target)
-        # Button-Zustand nachziehen
         self._sync_toggle_action()
 
     def _are_all_checked(self) -> bool:
@@ -956,17 +950,14 @@ class MainWindow(QtWidgets.QMainWindow):
                 return False
         return True
 
-    # NEU: Slot für die Toolbar-Aktion (nimmt das bool von 'toggled')
     def _on_toggle_checks(self, checked: bool):
         self._set_all_checks(checked)
 
-    # NEU: hält die Toolbar-Aktion in Sync mit der Tabelle
     def _sync_toggle_action(self):
         if hasattr(self, "act_toggle_checks"):
             self.act_toggle_checks.blockSignals(True)
             self.act_toggle_checks.setChecked(self._are_all_checked())
             self.act_toggle_checks.blockSignals(False)
-
 
 
 class _CheckWorker(QtCore.QThread):
@@ -981,17 +972,15 @@ class _CheckWorker(QtCore.QThread):
         import asyncio
         from .core import db, ssh_client
 
-        # Lade Hosts aus DB (alle) und filtere ggf.
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
-                 in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
 
         async def _job():
             for h in hosts:
                 if not h.get("primary_ip") or not h.get("user"):
                     self.one_result.emit(
                         {
-                            "host_id": h["id"],  # <<<<
+                            "host_id": h["id"],
                             "name": h.get("name", "?"),
                             "status": "error",
                             "note": "IP/User fehlt",
@@ -999,7 +988,6 @@ class _CheckWorker(QtCore.QThread):
                     )
                     continue
                 res = await ssh_client.check_updates_for_host(h)
-                # <<<< host_id sicherstellen
                 res.setdefault("host_id", h["id"])
                 self.one_result.emit(res)
 
@@ -1021,8 +1009,7 @@ class _SimWorker(QtCore.QThread):
         import traceback
 
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
-                 in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
 
         async def _job():
             for h in hosts:
@@ -1037,7 +1024,6 @@ class _SimWorker(QtCore.QThread):
                     )
                     continue
                 try:
-                    # >>> richtige Funktion für die Simulation! <<<
                     res = await ssh_client.simulate_upgrade_for_host(h)
                     res.setdefault("host_id", h["id"])
                     self.one_result.emit(res)
@@ -1051,7 +1037,6 @@ class _SimWorker(QtCore.QThread):
                         }
                     )
 
-        # Eigener Event-Loop pro QThread (robust für Python 3.13)
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
@@ -1071,8 +1056,7 @@ class _SimWorker(QtCore.QThread):
 
 
 class _UpgradeWorker(QtCore.QThread):
-    progress = QtCore.pyqtSignal(dict)  # {"name","line"}
-    # {"host_id","name","status","note","distro"?}
+    progress = QtCore.pyqtSignal(dict)
     host_done = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
@@ -1084,16 +1068,13 @@ class _UpgradeWorker(QtCore.QThread):
         import asyncio
         from .core import db, ssh_client
 
-        # Hosts aus DB laden und ggf. auf Auswahl filtern
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
-                 in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
 
         async def _job():
             for h in hosts:
-                name = h.get("name", "?")  # <<< vor der Nutzung setzen
+                name = h.get("name", "?")
                 if not h.get("primary_ip") or not h.get("user"):
-                    # hier NICHT one_result, sondern host_done:
                     self.host_done.emit(
                         {
                             "host_id": h["id"],
@@ -1109,8 +1090,7 @@ class _UpgradeWorker(QtCore.QThread):
                         if not isinstance(msg, dict):
                             continue
                         if msg.get("type") == "line":
-                            self.progress.emit(
-                                {"name": name, "line": msg["line"]})
+                            self.progress.emit({"name": name, "line": msg["line"]})
                         elif msg.get("type") == "result":
                             res = msg["result"] or {}
                             res.update({"host_id": h["id"], "name": name})
@@ -1154,8 +1134,7 @@ class _CleanSimWorker(QtCore.QThread):
 
 
 class _CleanRunWorker(QtCore.QThread):
-    progress = QtCore.pyqtSignal(dict)  # {"name","line"}
-    # {"host_id","name","status","note","distro"?}
+    progress = QtCore.pyqtSignal(dict)
     host_done = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
@@ -1177,8 +1156,7 @@ class _CleanRunWorker(QtCore.QThread):
                     agen = ssh_client.autoremove_host_stream(h)
                     async for msg in agen:
                         if isinstance(msg, dict) and msg.get("type") == "line":
-                            self.progress.emit(
-                                {"name": name, "line": msg["line"]})
+                            self.progress.emit({"name": name, "line": msg["line"]})
                         elif isinstance(msg, dict) and msg.get("type") == "result":
                             res = msg["result"] or {}
                             res.update({"host_id": h["id"], "name": name})
@@ -1208,11 +1186,9 @@ class _RebootWorker(QtCore.QThread):
     def run(self):
         from .core import db, ssh_client
         import asyncio
-        import traceback
 
         all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"]
-                 in self.host_ids]
+        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
 
         async def _job():
             for h in hosts:
@@ -1230,7 +1206,6 @@ class _RebootWorker(QtCore.QThread):
                         }
                     )
 
-        # Eigener Event-Loop pro Thread (stabil in Py 3.13)
         loop = asyncio.new_event_loop()
         try:
             asyncio.set_event_loop(loop)
