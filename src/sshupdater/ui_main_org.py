@@ -3,20 +3,10 @@ import platform
 import socket
 import shutil
 import subprocess
-from pathlib import Path
-from datetime import datetime, timedelta
-
 from PyQt6 import QtWidgets, QtGui, QtCore
-
+from pathlib import Path
+from datetime import datetime
 from sshupdater.core import settings
-
-# Optional nur für Windows-Infos (auf Linux nicht nötig)
-try:
-    import ctypes
-    import psutil
-except Exception:
-    ctypes = None
-    psutil = None
 
 
 class SysInfoWidget(QtWidgets.QFrame):
@@ -26,11 +16,11 @@ class SysInfoWidget(QtWidgets.QFrame):
         super().__init__(parent)
         self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
         self.setFrameShadow(QtWidgets.QFrame.Shadow.Plain)
-
         lay = QtWidgets.QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
 
+        # Schöner Stil: kleinere Schrift, dezente Farben
         self.setStyleSheet(
             """
             QFrame {
@@ -56,19 +46,21 @@ class SysInfoWidget(QtWidgets.QFrame):
                 color: #000;
                 font-weight: bold;
             }
-            """
+        """
         )
 
+        # Überschrift
         title = QtWidgets.QLabel("Systeminfo (lokal)")
         title.setProperty("class", "title")
         lay.addWidget(title)
 
+        # Layout für Key/Value-Paare
         grid = QtWidgets.QGridLayout()
         grid.setVerticalSpacing(4)
         grid.setHorizontalSpacing(10)
         lay.addLayout(grid)
 
-        def kv_row(row: int, key_text: str) -> QtWidgets.QLabel:
+        def kv_row(row, key_text):
             lab_k = QtWidgets.QLabel(key_text)
             lab_k.setProperty("class", "key")
             lab_v = QtWidgets.QLabel("–")
@@ -97,13 +89,14 @@ class SysInfoWidget(QtWidgets.QFrame):
 
         lay.addStretch(1)
 
+        # Auto-Refresh alle 5s
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self.refresh)
         self._timer.start(5000)
 
-        self.refresh()
+        self.refresh()  # initial
 
-    # -------- Linux Helpers --------
+    # -------- Helpers --------
     def _read_os_release(self) -> str:
         p = Path("/etc/os-release")
         if p.exists():
@@ -139,14 +132,14 @@ class SysInfoWidget(QtWidgets.QFrame):
                 k, v = line.split(":", 1)
                 kv[k.strip()] = v.strip()
 
-            def _kb(v: str) -> int:
+            def _kb(v):
                 return int(v.split()[0])
 
             total = _kb(kv["MemTotal"]) * 1024
             avail = _kb(kv.get("MemAvailable", kv["MemFree"])) * 1024
             used = total - avail
 
-            def fmt(b: float) -> str:
+            def fmt(b):
                 for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
                     if b < 1024 or unit == "TiB":
                         break
@@ -159,17 +152,19 @@ class SysInfoWidget(QtWidgets.QFrame):
 
     def _disk_root_str(self) -> str:
         try:
-            total, used, _free = shutil.disk_usage("/")
+            total, used, free = shutil.disk_usage("/")
 
-            def fmt_gib(b: int) -> str:
-                return f"{b / 1024**3:.1f} GiB"
+            def fmt(b):
+                # einfache GiB-Ausgabe
+                return f"{b/1024**3:.1f} GiB"
 
             pct = used / total * 100 if total else 0
-            return f"{fmt_gib(used)} / {fmt_gib(total)}  ({pct:.0f} %)"
+            return f"{fmt(used)} / {fmt(total)}  ({pct:.0f} %)"
         except Exception:
             return "–"
 
     def _ips_str(self) -> str:
+        # robuste IP-Ermittlung über `ip -4 addr`
         try:
             out = subprocess.check_output(
                 ["ip", "-4", "addr"], text=True, errors="ignore"
@@ -185,124 +180,40 @@ class SysInfoWidget(QtWidgets.QFrame):
         except Exception:
             return "–"
 
-    # -------- Windows Helpers --------
-    @staticmethod
-    def _windows_uptime_str() -> str:
-        if ctypes is None:
-            return "–"
-        try:
-            GetTickCount64 = ctypes.windll.kernel32.GetTickCount64
-            GetTickCount64.restype = ctypes.c_ulonglong
-            ms = GetTickCount64()
-            return str(timedelta(milliseconds=ms))
-        except Exception:
-            return "–"
-
-    @staticmethod
-    def _windows_ram_str() -> str:
-        if psutil is None:
-            return "–"
-        try:
-            mem = psutil.virtual_memory()
-            used = mem.used / (1024**3)
-            total = mem.total / (1024**3)
-            return f"{used:.1f} / {total:.1f} GB ({mem.percent:.0f}%)"
-        except Exception:
-            return "–"
-
-    @staticmethod
-    def _windows_ips_str() -> str:
-        if psutil is None:
-            return "–"
-        try:
-            addrs = psutil.net_if_addrs()
-            ip_list = []
-            for iface, entries in addrs.items():
-                for e in entries:
-                    if e.family == socket.AF_INET:
-                        ip_list.append(f"{iface}: {e.address}")
-            return ", ".join(ip_list) if ip_list else "–"
-        except Exception:
-            return "–"
-
-    @staticmethod
-    def _windows_cpu_load_str() -> str:
-        if psutil is None:
-            return "–"
-        try:
-            # interval=None blockiert nicht die UI
-            return f"{psutil.cpu_percent(interval=None):.1f}%"
-        except Exception:
-            return "–"
-
     def refresh(self):
         try:
             host = socket.gethostname()
         except Exception:
             host = "–"
+        os_name = self._read_os_release()
+        kernel = platform.release()
+        uptime = self._uptime_str()
+        load = (
+            " / ".join(f"{v:.2f}" for v in os.getloadavg())
+            if hasattr(os, "getloadavg")
+            else "–"
+        )
+        mem = self._mem_str()
+        disk = self._disk_root_str()
+        ips = self._ips_str()
 
-        system = platform.system()
-
-        # ---------------------------
-        # LINUX
-        # ---------------------------
-        if system == "Linux":
-            os_name = self._read_os_release()
-            kernel = platform.release()
-            uptime = self._uptime_str()
-            load = (
-                " / ".join(f"{v:.2f}" for v in os.getloadavg())
-                if hasattr(os, "getloadavg")
-                else "–"
+        # SSH-Dienst prüfen
+        try:
+            out = subprocess.run(
+                ["systemctl", "is-active", "ssh"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
             )
-            mem = self._mem_str()
-            disk = self._disk_root_str()
-            ips = self._ips_str()
-
-            try:
-                out = subprocess.run(
-                    ["systemctl", "is-active", "ssh"],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                )
-                ssh_status = out.stdout.strip()
-                if ssh_status == "active":
-                    ssh_state = "aktiv ✅"
-                elif ssh_status == "inactive":
-                    ssh_state = "inaktiv ⚪"
-                else:
-                    ssh_state = f"{ssh_status or 'unbekannt'} ⚠️"
-            except Exception:
-                ssh_state = "nicht installiert ❌"
-
-        # ---------------------------
-        # WINDOWS
-        # ---------------------------
-        elif system == "Windows":
-            os_name = platform.platform()
-            kernel = platform.version()
-            uptime = self._windows_uptime_str()
-            load = self._windows_cpu_load_str()
-            mem = self._windows_ram_str()
-            disk = (
-                self._disk_root_str()
-            )  # shutil.disk_usage("/") klappt i.d.R. auch auf Windows
-            ips = self._windows_ips_str()
-            ssh_state = "nicht verfügbar"
-
-        # ---------------------------
-        # UNBEKANNT
-        # ---------------------------
-        else:
-            os_name = system
-            kernel = platform.release()
-            uptime = "–"
-            load = "–"
-            mem = "–"
-            disk = "–"
-            ips = "–"
-            ssh_state = "–"
+            ssh_status = out.stdout.strip()
+            if ssh_status == "active":
+                ssh_state = "aktiv ✅"
+            elif ssh_status == "inactive":
+                ssh_state = "inaktiv ⚪"
+            else:
+                ssh_state = f"{ssh_status or 'unbekannt'} ⚠️"
+        except Exception:
+            ssh_state = "nicht installiert ❌"
 
         self.lab_host.setText(f"Hostname: <b>{host}</b>")
         self.lab_os.setText(f"OS: {os_name}")
@@ -332,10 +243,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_clean = QtGui.QAction("Bereinigen", self)
         self.act_reboot = QtGui.QAction("Reboot", self)
         self.act_config = QtGui.QAction("Konfiguration", self)
-
         self.act_toggle_checks = QtGui.QAction("Haken", self)
         self.act_toggle_checks.setToolTip("Alle auswählen/abwählen")
-        self.act_toggle_checks.setCheckable(True)
+        self.act_toggle_checks.setCheckable(True)  # <- wichtig
         self.act_toggle_checks.setIcon(self._make_dot_icon("#3a7cec"))
 
         for a in (
@@ -350,7 +260,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addSeparator()
         tb.addAction(self.act_toggle_checks)
 
-        # --- Autor-Hinweis rechts in der Toolbar ---
+        # --- User-Label rechts in der Toolbar (Autor-Hinweis) ---
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -358,7 +268,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         tb.addWidget(spacer)
 
-        self.userLabel = QtWidgets.QLabel(" © Faber38 / Calimero")
+        self.userLabel = QtWidgets.QLabel(" © Faber38")
         self.userLabel.setObjectName("userLabel")
         self.userLabel.setStyleSheet(
             "font-size: 10pt; font-weight: bold; padding-right: 10px;"
@@ -374,12 +284,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_reboot.triggered.connect(self._on_reboot)
         self.act_toggle_checks.toggled.connect(self._on_toggle_checks)
 
-        # ---- Splitter links/rechts
+        # Zentraler Bereich: resizable via QSplitter
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
 
+        # Linkes Panel (Systeminfo)
         left = SysInfoWidget()
-        left.setMinimumWidth(260)
-        left.setMaximumWidth(600)
+        left.setMinimumWidth(260)  # untere Grenze
+        left.setMaximumWidth(600)  # optionale obere Grenze (anpassbar)
 
         # Tabelle
         self.table = QtWidgets.QTableView()
@@ -400,31 +311,39 @@ class MainWindow(QtWidgets.QMainWindow):
         self.right_splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         self.right_splitter.addWidget(self.table)
         self.right_splitter.addWidget(self.log)
-        self.right_splitter.setSizes([420, 240])
+        self.right_splitter.setSizes([420, 240])  # Startaufteilung
 
+        # In den Splitter einsetzen
         splitter.addWidget(left)
         splitter.addWidget(self.right_splitter)
 
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
+        # Dehnung: rechts bekommt den Platz
+        splitter.setStretchFactor(0, 0)  # links fix(er)
+        splitter.setStretchFactor(1, 1)  # rechts dehnt
+
+        # Startbreiten (px) einstellen
         splitter.setSizes([320, 900])
 
+        # Splitter als zentrales Widget
         self.setCentralWidget(splitter)
 
-        # ---- Settings / Restore
+        # ---- Einstellungen wiederherstellen (Theme, Geometrie, Splitter)
         self._qset = QtCore.QSettings("Faber38", "SSH Updater")
 
+        # Fenster-Geometrie
         geom = self._qset.value("win/geometry", None)
         if geom is not None:
             self.restoreGeometry(geom)
 
-        sizes_lr = self._qset.value("ui/splitter_sizes", None)
-        if sizes_lr:
+        # Splitter-Größen (links/rechts)
+        sizes = self._qset.value("ui/splitter_sizes", None)
+        if sizes:
             try:
-                self.centralWidget().setSizes([int(s) for s in sizes_lr])
+                self.centralWidget().setSizes([int(s) for s in sizes])
             except Exception:
                 pass
 
+        # ✅ Splitter-Größen rechts (Tabelle/Log)
         sizes_r = self._qset.value("ui/right_splitter_sizes", None)
         if sizes_r:
             try:
@@ -432,10 +351,12 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
+        # Theme aus QSettings anwenden (Fallback auf settings.THEME)
         self._apply_theme()
         self.statusBar().showMessage("Bereit")
 
     def _get_selected_host_ids(self) -> list:
+        """Return list of host IDs (int) that are checked in the table."""
         model = self.table.model()
         ids = []
         if model is None:
@@ -446,6 +367,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 chk_item is not None
                 and chk_item.checkState() == QtCore.Qt.CheckState.Checked
             ):
+                # Host-ID ist im Name-Item (Spalte 1) gespeichert
                 name_item = model.item(r, 1)
                 hid = name_item.data(QtCore.Qt.ItemDataRole.UserRole)
                 if hid is not None:
@@ -453,9 +375,11 @@ class MainWindow(QtWidgets.QMainWindow):
         return ids
 
     def _apply_theme(self):
+        # 1) Theme aus QSettings lesen, 2) Fallback auf settings.THEME
         q_theme = QtCore.QSettings("Faber38", "SSH Updater").value("ui/theme", None)
         theme = (q_theme or settings.THEME or "standard").lower()
 
+        # QSS-Datei anhand theme wählen
         base = Path(__file__).resolve().parents[1]  # src/sshupdater/..
         qss = None
         if theme == "dark":
@@ -468,7 +392,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if qss and qss.exists():
             self.setStyleSheet(qss.read_text(encoding="utf-8"))
         else:
-            self.setStyleSheet("")
+            self.setStyleSheet("")  # Standard-Qt-Theme
 
     def _open_config(self):
         from .ui_config import ConfigDialog
@@ -486,6 +410,7 @@ class MainWindow(QtWidgets.QMainWindow):
         return -1
 
     def _make_dot_icon(self, color: str) -> QtGui.QIcon:
+        # Farbe -> runder Punkt als QIcon (gecacht)
         cache = getattr(self, "_dot_cache", {})
         if color in cache:
             return cache[color]
@@ -506,13 +431,15 @@ class MainWindow(QtWidgets.QMainWindow):
         return icon
 
     def _status_icon_for(self, online: bool, updates: int | None) -> QtGui.QIcon:
+        # online + keine Updates => grün, online + Updates => gelb, offline/Fehler => rot
         if not online:
-            return self._make_dot_icon("#e23b3b")
+            return self._make_dot_icon("#e23b3b")  # rot
         if updates is None:
-            return self._make_dot_icon("#9e9e9e")
+            return self._make_dot_icon("#9e9e9e")  # grau (unbekannt)
         return self._make_dot_icon("#3ac569" if updates == 0 else "#f2b84b")
 
-    # ========= Prüfen =========
+    # ========= Prüfen: Worker-Thread + Slots =========
+
     def _on_check(self):
         for a in (
             self.act_check,
@@ -549,6 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.start()
 
     def _on_check_result(self, res: dict):
+        # Log
         if res.get("status") == "ok":
             self.log.append(
                 f"✔ {res['name']} [{res.get('distro', '?')}]: {res.get('updates', 0)} Updates"
@@ -561,6 +489,7 @@ class MainWindow(QtWidgets.QMainWindow):
             updates = None
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
+        # UI-Zeile aktualisieren
         row = self._find_row_by_host_id(res.get("host_id"))
         if row >= 0:
             model = self.table.model()
@@ -573,11 +502,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 status_item = QtGui.QStandardItem("Offline")
                 status_item.setIcon(self._status_icon_for(False, None))
 
-            model.setItem(row, 5, status_item)
+            model.setItem(row, 5, status_item)  # Spalte "Status"
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            model.setItem(row, 6, QtGui.QStandardItem(timestamp))
+            model.setItem(row, 6, QtGui.QStandardItem(timestamp))  # "Letzte Prüfung"
 
+            # in DB persistieren
             try:
                 from .core import db
 
@@ -646,7 +576,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 if preview:
                     self.log.append(preview)
                     if len(lines) > 20:
-                        self.log.append(f"... ({len(lines) - 20} weitere Zeilen)\n")
+                        self.log.append(f"... ({len(lines)-20} weitere Zeilen)\n")
                 else:
                     self.log.append("(keine Details)\n")
         else:
@@ -667,6 +597,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # ========= Upgraden =========
     def _on_upgrade(self):
+        # Sicherheitsabfrage
         ret = QtWidgets.QMessageBox.question(
             self,
             "Upgrade starten",
@@ -677,6 +608,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if ret != QtWidgets.QMessageBox.StandardButton.Yes:
             return
 
+        # Buttons sperren
         for a in (
             self.act_check,
             self.act_sim,
@@ -713,10 +645,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.upg_worker.start()
 
     def _on_upgrade_progress(self, payload: dict):
+        # payload: {"name": "...", "line": "..."}
         self.log.append(f"{payload['name']}: {payload['line']}")
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_upgrade_host_done(self, res: dict):
+        # res: {"host_id", "name", "status", "note", "distro"}
         if res.get("status") == "ok":
             self.log.append(
                 f"✅ {res['name']}: Upgrade abgeschlossen ({res.get('distro', '?')})."
@@ -725,8 +659,10 @@ class MainWindow(QtWidgets.QMainWindow):
             if row >= 0:
                 model = self.table.model()
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                model.setItem(row, 5, QtGui.QStandardItem("Online – 0 Updates"))
-                model.setItem(row, 6, QtGui.QStandardItem(ts))
+                model.setItem(
+                    row, 5, QtGui.QStandardItem("Online – 0 Updates")
+                )  # Status
+                model.setItem(row, 6, QtGui.QStandardItem(ts))  # Letzte Prüfung
                 try:
                     from .core import db
 
@@ -749,8 +685,10 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             a.setEnabled(True)
 
-    # ========= Bereinigen =========
+    # ========= Bereinigen ==========
+
     def _on_clean(self):
+        # Auswahl prüfen
         selected = self._get_selected_host_ids()
         if not selected:
             QtWidgets.QMessageBox.information(
@@ -759,6 +697,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         self._clean_selected = selected
 
+        # Buttons sperren
         for a in (
             self.act_check,
             self.act_sim,
@@ -772,6 +711,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.clear()
         self.log.append("Starte Autoremove-Simulation...\n")
 
+        # 1) Simulation
         self.clean_sim_worker = _CleanSimWorker(selected)
         self.clean_sim_worker.one_result.connect(self._on_clean_sim_result)
         self.clean_sim_worker.finished_all.connect(self._on_clean_sim_done)
@@ -791,7 +731,7 @@ class MainWindow(QtWidgets.QMainWindow):
                         + (
                             "\n"
                             if len(lines) <= 20
-                            else f"\n... ({len(lines) - 20} weitere Zeilen)\n"
+                            else f"\n... ({len(lines)-20} weitere Zeilen)\n"
                         )
                     )
         else:
@@ -799,11 +739,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_sim_done(self):
+        # Nachfrage nur, wenn irgendwo >0 Pakete
         text = self.log.toPlainText()
         any_removals = (
             "würden entfernt" in text and "0 Pakete würden entfernt" not in text
         )
-
         sel = getattr(self, "_clean_selected", [])
         if not sel:
             self.log.append("\nAbgebrochen (keine Auswahl).")
@@ -838,6 +778,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 a.setEnabled(True)
             return
 
+        # 2) Live-Run
         self.log.append("\nStarte Autoremove...\n")
         self.clean_run_worker = _CleanRunWorker(sel)
         self.clean_run_worker.progress.connect(self._on_clean_progress)
@@ -870,6 +811,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._clean_selected = []
 
     # ========= reboot =========
+
     def _on_reboot(self):
         selected = self._get_selected_host_ids()
         if not selected:
@@ -881,7 +823,8 @@ class MainWindow(QtWidgets.QMainWindow):
         ret = QtWidgets.QMessageBox.question(
             self,
             "Reboot ausführen",
-            f"Sollen {len(selected)} ausgewählte Host(s) neu gestartet werden?\nHinweis: Der SSH-Stream bricht ggf. sofort ab.",
+            f"Sollen {len(selected)} ausgewählte Host(s) neu gestartet werden?\n"
+            "Hinweis: Der SSH-Stream bricht ggf. sofort ab.",
         )
         if ret != QtWidgets.QMessageBox.StandardButton.Yes:
             return
@@ -924,6 +867,7 @@ class MainWindow(QtWidgets.QMainWindow):
             a.setEnabled(True)
 
     # ========= Hosts laden =========
+
     def _reload_hosts(self):
         from .core import db
 
@@ -975,6 +919,7 @@ class MainWindow(QtWidgets.QMainWindow):
             if isinstance(splitter, QtWidgets.QSplitter):
                 self._qset.setValue("ui/splitter_sizes", splitter.sizes())
 
+            # ✅ Rechter Splitter (Tabelle/Log) merken
             if hasattr(self, "right_splitter"):
                 self._qset.setValue(
                     "ui/right_splitter_sizes", self.right_splitter.sizes()
