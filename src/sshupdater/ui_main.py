@@ -358,7 +358,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         tb.addWidget(spacer)
 
-        self.userLabel = QtWidgets.QLabel(" © Faber38 / Calimero")
+        self.userLabel = QtWidgets.QLabel(" © Faber38 / © CalimerO")
         self.userLabel.setObjectName("userLabel")
         self.userLabel.setStyleSheet(
             "font-size: 10pt; font-weight: bold; padding-right: 10px;"
