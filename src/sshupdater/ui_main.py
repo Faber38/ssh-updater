@@ -3,6 +3,8 @@ import platform
 import socket
 import shutil
 import subprocess
+import ipaddress
+
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -101,6 +103,13 @@ class SysInfoWidget(QtWidgets.QFrame):
         self._timer.timeout.connect(self.refresh)
         self._timer.start(5000)
 
+        # psutil CPU-Percent "primen", sonst beim ersten refresh manchmal 0.0%
+        if psutil is not None:
+            try:
+                psutil.cpu_percent(interval=None)
+            except Exception:
+                pass
+
         self.refresh()
 
     # -------- Linux Helpers --------
@@ -185,6 +194,16 @@ class SysInfoWidget(QtWidgets.QFrame):
         except Exception:
             return "–"
 
+    @staticmethod
+    def _fmt_uptime(td: timedelta) -> str:
+        total = int(td.total_seconds())
+        days, rem = divmod(total, 86400)
+        hrs, rem = divmod(rem, 3600)
+        mins, _secs = divmod(rem, 60)
+        if days:
+            return f"{days}d {hrs:02}h {mins:02}m"
+        return f"{hrs:02}h {mins:02}m"
+
     # -------- Windows Helpers --------
     @staticmethod
     def _windows_uptime_str() -> str:
@@ -194,7 +213,8 @@ class SysInfoWidget(QtWidgets.QFrame):
             GetTickCount64 = ctypes.windll.kernel32.GetTickCount64
             GetTickCount64.restype = ctypes.c_ulonglong
             ms = GetTickCount64()
-            return str(timedelta(milliseconds=ms))
+            return SysInfoWidget._fmt_uptime(timedelta(milliseconds=int(ms)))
+
         except Exception:
             return "–"
 
@@ -216,11 +236,36 @@ class SysInfoWidget(QtWidgets.QFrame):
             return "–"
         try:
             addrs = psutil.net_if_addrs()
+            stats = psutil.net_if_stats()
+
             ip_list = []
+            seen = set()
+
             for iface, entries in addrs.items():
+                st = stats.get(iface)
+                if st is not None and not st.isup:
+                    continue
+
                 for e in entries:
-                    if e.family == socket.AF_INET:
-                        ip_list.append(f"{iface}: {e.address}")
+                    if e.family != socket.AF_INET:
+                        continue
+                    ip = e.address
+
+                    # Filter
+                    try:
+                        ip_obj = ipaddress.ip_address(ip)
+                        if ip_obj.is_loopback or ip_obj.is_link_local:
+                            continue
+                    except Exception:
+                        continue
+
+                    key = (iface, ip)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+
+                    ip_list.append(f"{iface}: {ip}")
+
             return ", ".join(ip_list) if ip_list else "–"
         except Exception:
             return "–"
@@ -235,13 +280,41 @@ class SysInfoWidget(QtWidgets.QFrame):
         except Exception:
             return "–"
 
+    @staticmethod
+    def _detect_platform() -> str:
+        sysname = platform.system()  # Windows, Linux, Darwin
+        if sysname == "Linux":
+            # WSL erkennen
+            try:
+                pv = (
+                    Path("/proc/version")
+                    .read_text(encoding="utf-8", errors="ignore")
+                    .lower()
+                )
+                if "microsoft" in pv or "wsl" in pv:
+                    return "WSL"
+            except Exception:
+                pass
+            return "Linux"
+        return sysname
+
+    @staticmethod
+    def _windows_disk_root_str() -> str:
+        try:
+            drive = os.environ.get("SystemDrive", "C:") + "\\"
+            total, used, _free = shutil.disk_usage(drive)
+            pct = used / total * 100 if total else 0
+            return f"{used / 1024**3:.1f} / {total / 1024**3:.1f} GiB ({pct:.0f} %)"
+        except Exception:
+            return "–"
+
     def refresh(self):
         try:
             host = socket.gethostname()
         except Exception:
             host = "–"
 
-        system = platform.system()
+        system = self._detect_platform()
 
         # ---------------------------
         # LINUX
@@ -285,9 +358,7 @@ class SysInfoWidget(QtWidgets.QFrame):
             uptime = self._windows_uptime_str()
             load = self._windows_cpu_load_str()
             mem = self._windows_ram_str()
-            disk = (
-                self._disk_root_str()
-            )  # shutil.disk_usage("/") klappt i.d.R. auch auf Windows
+            disk = self._windows_disk_root_str()
             ips = self._windows_ips_str()
             ssh_state = "nicht verfügbar"
 
