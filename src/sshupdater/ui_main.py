@@ -504,6 +504,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 pass
 
         self._apply_theme()
+        from sshupdater import __version__
+
+        self.setWindowTitle(f"SSH Updater v{__version__}")
         self.statusBar().showMessage("Bereit")
 
     def _get_selected_host_ids(self) -> list:
