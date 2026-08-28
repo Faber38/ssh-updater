@@ -170,40 +170,75 @@ async def simulate_upgrade_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
 
 async def _stream(conn, cmd: str, timeout: int = 0):
     """
-    Führt einen Befehl aus und liefert stdout zeilenweise (yield).
+    Führt einen Befehl aus und liefert die komplette Prozessausgabe
+    (stdout + stderr) zeilenweise.
     timeout=0 -> kein globales Timeout (Paket-Upgrades können dauern).
     Gibt am Ende eine Zeile [RC=<code>] aus.
     """
-    proc = await conn.create_process(cmd)
-    rc = 0
+    proc = await conn.create_process(
+        cmd,
+        stderr=asyncssh.STDOUT,
+    )
+    rc = 1
     try:
         while True:
             line = await proc.stdout.readline()
             if not line:
                 break
             yield line.rstrip("\n")
-        rc = await proc.wait()
+
+        # AsyncSSH wait() liefert ein Prozess-Ergebnisobjekt.
+        # Der echte numerische Rückgabecode steht in proc.exit_status.
+        await proc.wait()
+        rc = proc.exit_status
+        if rc is None:
+            rc = 1
     except Exception as e:
         yield f"[client] stream error: {e}"
         rc = 1
-    # kein return in async generatoren
-    yield f"[RC={rc}]"
+
+    yield f"[RC={int(rc)}]"
 
 async def _upgrade_debian(conn, use_sudo: bool):
     prefix = "sudo -n " if use_sudo else ""
 
-    # Paketlisten aktualisieren
-    async for _ in _stream(
+    # Paketlisten aktualisieren und Ausgabe/Fehler ebenfalls weiterreichen.
+    update_rc = 0
+    async for line in _stream(
         conn,
         f"{prefix}apt-get update -y -o=Dpkg::Use-Pty=0"
     ):
-        pass
+        yield line
+        if line.startswith("[RC="):
+            try:
+                update_rc = int(line[4:-1])
+            except Exception:
+                update_rc = 1
 
-    # Upgrade streamen
-    cmd = (
-        f"{prefix}DEBIAN_FRONTEND=noninteractive "
-        "apt-get -y dist-upgrade -o=Dpkg::Use-Pty=0"
-    )
+    # Wenn schon apt-get update scheitert, kein dist-upgrade mehr starten.
+    if update_rc != 0:
+        return
+
+    # Bei root können wir DEBIAN_FRONTEND direkt setzen.
+    # Bei sudo darf DEBIAN_FRONTEND ohne SETENV-Regel nicht übergeben werden.
+    # Darum verwenden wir hier apt/dpkg-Optionen, welche Konfigurationsdatei-
+    # Rückfragen automatisch mit der bestehenden Konfiguration beantworten.
+    if use_sudo:
+        cmd = (
+            f"{prefix}apt-get -y dist-upgrade "
+            "-o=Dpkg::Use-Pty=0 "
+            "-o=Dpkg::Options::=--force-confdef "
+            "-o=Dpkg::Options::=--force-confold"
+        )
+    else:
+        cmd = (
+            "DEBIAN_FRONTEND=noninteractive "
+            "apt-get -y dist-upgrade "
+            "-o=Dpkg::Use-Pty=0 "
+            "-o=Dpkg::Options::=--force-confdef "
+            "-o=Dpkg::Options::=--force-confold"
+        )
+
     async for line in _stream(conn, cmd):
         yield line
 

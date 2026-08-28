@@ -403,6 +403,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_clean = QtGui.QAction("Bereinigen", self)
         self.act_reboot = QtGui.QAction("Reboot", self)
         self.act_config = QtGui.QAction("Konfiguration", self)
+        self.act_stop = QtGui.QAction("Stopp", self)
+        self.act_stop.setToolTip("Nach dem aktuell laufenden Host anhalten")
+        self.act_stop.setEnabled(False)
 
         self.act_toggle_checks = QtGui.QAction("Haken", self)
         self.act_toggle_checks.setToolTip("Alle auswählen/abwählen")
@@ -421,13 +424,18 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addSeparator()
         tb.addAction(self.act_toggle_checks)
 
-        # --- Autor-Hinweis rechts in der Toolbar ---
+        # --- Rechter Bereich der Toolbar ---
         spacer = QtWidgets.QWidget()
         spacer.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
             QtWidgets.QSizePolicy.Policy.Preferred,
         )
         tb.addWidget(spacer)
+
+        # Stopp ganz rechts, direkt vor dem Autor-Hinweis
+        tb.addSeparator()
+        tb.addAction(self.act_stop)
+        tb.addSeparator()
 
         self.userLabel = QtWidgets.QLabel(" © @Faber38 / © @CalimerO")
         self.userLabel.setObjectName("userLabel")
@@ -443,6 +451,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_upg.triggered.connect(self._on_upgrade)
         self.act_clean.triggered.connect(self._on_clean)
         self.act_reboot.triggered.connect(self._on_reboot)
+        self.act_stop.triggered.connect(self._on_stop_requested)
         self.act_toggle_checks.toggled.connect(self._on_toggle_checks)
 
         # ---- Splitter links/rechts
@@ -739,6 +748,28 @@ class MainWindow(QtWidgets.QMainWindow):
         ):
             a.setEnabled(True)
 
+    def _on_stop_requested(self):
+        worker = None
+        if hasattr(self, "upg_worker") and self.upg_worker.isRunning():
+            worker = self.upg_worker
+        elif hasattr(self, "clean_run_worker") and self.clean_run_worker.isRunning():
+            worker = self.clean_run_worker
+
+        if worker is None:
+            self.act_stop.setEnabled(False)
+            return
+
+        worker.request_stop()
+        self.act_stop.setEnabled(False)
+        self.statusBar().showMessage(
+            "Stopp angefordert – aktueller Host wird noch beendet ..."
+        )
+        self.log.append(
+            "\n⏹ Stopp angefordert. Der aktuell laufende Host wird noch sauber beendet; "
+            "danach wird nicht mit dem nächsten Host fortgefahren."
+        )
+        self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
+
     # ========= Upgraden =========
     def _on_upgrade(self):
         ret = QtWidgets.QMessageBox.question(
@@ -782,9 +813,15 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.upg_worker = _UpgradeWorker(selected)
         self.upg_worker.progress.connect(self._on_upgrade_progress)
+        self.upg_worker.host_started.connect(self._on_upgrade_host_started)
         self.upg_worker.host_done.connect(self._on_upgrade_host_done)
         self.upg_worker.finished_all.connect(self._on_upgrade_done)
+        self.act_stop.setEnabled(True)
+        self.statusBar().showMessage("Upgrade wird gestartet ...")
         self.upg_worker.start()
+
+    def _on_upgrade_host_started(self, payload: dict):
+        self.statusBar().showMessage(f"Upgrade läuft: {payload.get('name', '?')} ...")
 
     def _on_upgrade_progress(self, payload: dict):
         self.log.append(f"{payload['name']}: {payload['line']}")
@@ -812,7 +849,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_upgrade_done(self):
-        self.log.append("\nAlle Upgrades beendet.")
+        stopped = bool(getattr(self.upg_worker, "stop_requested", False))
+        if stopped:
+            self.log.append("\nUpgrade-Lauf nach aktuellem Host gestoppt.")
+            self.statusBar().showMessage("Upgrade gestoppt", 5000)
+        else:
+            self.log.append("\nAlle Upgrades beendet.")
+            self.statusBar().showMessage("Upgrade abgeschlossen", 5000)
+        self.act_stop.setEnabled(False)
         for a in (
             self.act_check,
             self.act_sim,
@@ -915,9 +959,17 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.append("\nStarte Autoremove...\n")
         self.clean_run_worker = _CleanRunWorker(sel)
         self.clean_run_worker.progress.connect(self._on_clean_progress)
+        self.clean_run_worker.host_started.connect(self._on_clean_host_started)
         self.clean_run_worker.host_done.connect(self._on_clean_host_done)
         self.clean_run_worker.finished_all.connect(self._on_clean_done)
+        self.act_stop.setEnabled(True)
+        self.statusBar().showMessage("Bereinigung wird gestartet ...")
         self.clean_run_worker.start()
+
+    def _on_clean_host_started(self, payload: dict):
+        self.statusBar().showMessage(
+            f"Bereinigung läuft: {payload.get('name', '?')} ..."
+        )
 
     def _on_clean_progress(self, payload: dict):
         self.log.append(f"{payload['name']}: {payload['line']}")
@@ -931,7 +983,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_done(self):
-        self.log.append("\nBereinigung beendet.")
+        stopped = bool(getattr(self.clean_run_worker, "stop_requested", False))
+        if stopped:
+            self.log.append("\nBereinigung nach aktuellem Host gestoppt.")
+            self.statusBar().showMessage("Bereinigung gestoppt", 5000)
+        else:
+            self.log.append("\nBereinigung beendet.")
+            self.statusBar().showMessage("Bereinigung abgeschlossen", 5000)
+        self.act_stop.setEnabled(False)
         for a in (
             self.act_check,
             self.act_sim,
@@ -1186,12 +1245,17 @@ class _SimWorker(QtCore.QThread):
 
 class _UpgradeWorker(QtCore.QThread):
     progress = QtCore.pyqtSignal(dict)
+    host_started = QtCore.pyqtSignal(dict)
     host_done = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
     def __init__(self, host_ids: list | None = None):
         super().__init__()
         self.host_ids = host_ids
+        self.stop_requested = False
+
+    def request_stop(self):
+        self.stop_requested = True
 
     def run(self):
         import asyncio
@@ -1202,7 +1266,12 @@ class _UpgradeWorker(QtCore.QThread):
 
         async def _job():
             for h in hosts:
+                if self.stop_requested:
+                    break
+
                 name = h.get("name", "?")
+                self.host_started.emit({"host_id": h["id"], "name": name})
+
                 if not h.get("primary_ip") or not h.get("user"):
                     self.host_done.emit(
                         {
@@ -1264,12 +1333,17 @@ class _CleanSimWorker(QtCore.QThread):
 
 class _CleanRunWorker(QtCore.QThread):
     progress = QtCore.pyqtSignal(dict)
+    host_started = QtCore.pyqtSignal(dict)
     host_done = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
     def __init__(self, host_ids: list[int]):
         super().__init__()
         self.host_ids = host_ids
+        self.stop_requested = False
+
+    def request_stop(self):
+        self.stop_requested = True
 
     def run(self):
         import asyncio
@@ -1280,7 +1354,12 @@ class _CleanRunWorker(QtCore.QThread):
 
         async def _job():
             for h in hosts:
+                if self.stop_requested:
+                    break
+
                 name = h.get("name", "?")
+                self.host_started.emit({"host_id": h["id"], "name": name})
+
                 try:
                     agen = ssh_client.autoremove_host_stream(h)
                     async for msg in agen:
