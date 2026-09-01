@@ -39,11 +39,27 @@ async def _detect_distro(conn) -> str:
     return "unknown"
 
 # ---------- Update Check  ----------
-async def _check_debian(conn):
-    await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; sudo -n apt-get -qq update'")
-    code, out, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt-get -s dist-upgrade'")
+
+class UpdateCheckError(RuntimeError):
+    pass
+
+
+def _raise_check_error(step: str, code: int, stderr: str) -> None:
     if code == 124:
-        return -1, "Timeout"
+        raise UpdateCheckError(f"Zeitüberschreitung bei {step}.")
+    detail = (stderr or "").strip().splitlines()
+    suffix = f": {detail[0][:300]}" if detail else ""
+    raise UpdateCheckError(f"{step} fehlgeschlagen (Exitcode {code}){suffix}")
+
+
+async def _check_debian(conn):
+    code, _, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; sudo -n apt-get -qq update'")
+    if code != 0:
+        _raise_check_error("apt-get update", code, err)
+
+    code, out, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt-get -s dist-upgrade'")
+    if code != 0:
+        _raise_check_error("apt-get -s dist-upgrade", code, err)
 
     n = 0
     for line in out.splitlines():
@@ -59,21 +75,29 @@ async def _check_debian(conn):
     return n, err.strip()
 
 async def _check_rpm(conn):
-    code, out, err = await _run(conn, "sudo -n dnf -q check-update; echo $?")
-    last = out.strip().splitlines()[-1] if out else "0"
-    try:
-        rc = int(last)
-    except ValueError:
-        rc = 0
-    n = 0 if rc in (0, 1) else 1
+    code, out, err = await _run(conn, "sudo -n dnf -q check-update")
+    if code == 0:
+        return 0, err.strip()
+    if code != 100:
+        _raise_check_error("dnf check-update", code, err)
+
+    package_line = re.compile(r"^\S+\.\S+\s+\S+\s+\S+(?:\s+.*)?$")
+    n = sum(1 for line in out.splitlines() if package_line.match(line.strip()))
     return n, err.strip()
 
 async def _check_arch(conn):
-    code, out, err = await _run(conn, "bash -lc 'command -v checkupdates >/dev/null 2>&1 && checkupdates | wc -l || echo 0'")
-    try:
-        n = int(out.strip()) if out.strip() else 0
-    except ValueError:
-        n = 0
+    code, _, err = await _run(conn, "command -v checkupdates")
+    if code != 0:
+        if code == 124:
+            _raise_check_error("Prüfung auf checkupdates", code, err)
+        raise UpdateCheckError(
+            "checkupdates ist nicht verfügbar; bitte pacman-contrib installieren."
+        )
+
+    code, out, err = await _run(conn, "checkupdates")
+    if code != 0:
+        _raise_check_error("checkupdates", code, err)
+    n = sum(1 for line in out.splitlines() if line.strip())
     return n, err.strip()
 
 async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
@@ -97,6 +121,8 @@ async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 return {"host_id": host["id"], "name": name, "status": "error", "note": "Unbekannte Distro"}
             return {"host_id": host["id"], "name": name, "status": "ok", "distro": distro, "updates": max(n,0), "note": note or ""}
+    except UpdateCheckError as e:
+        return {"host_id": host["id"], "name": name, "status": "error", "note": str(e)}
     except (asyncssh.Error, OSError) as e:
         return {"host_id": host["id"], "name": name, "status": "error", "note": f"SSH: {e}"}
 
