@@ -669,7 +669,12 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.statusBar().showMessage(f"Speicherfehler: {e}", 5000)
 
     def _on_check_done(self):
-        self.log.append("\nFertig.")
+        fatal_error = getattr(self.worker, "fatal_error", None)
+        if fatal_error:
+            self.log.append(f"\nPrüfung wegen internem Fehler beendet: {fatal_error}")
+        else:
+            self.log.append("\nFertig.")
+        self.act_stop.setEnabled(False)
         for a in (
             self.act_check,
             self.act_sim,
@@ -737,7 +742,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_sim_done(self):
-        self.log.append("\nFertig.")
+        fatal_error = getattr(self.sim_worker, "fatal_error", None)
+        if fatal_error:
+            self.log.append(f"\nSimulation wegen internem Fehler beendet: {fatal_error}")
+        else:
+            self.log.append("\nFertig.")
+        self.act_stop.setEnabled(False)
         for a in (
             self.act_check,
             self.act_sim,
@@ -849,8 +859,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_upgrade_done(self):
+        fatal_error = getattr(self.upg_worker, "fatal_error", None)
         stopped = bool(getattr(self.upg_worker, "stop_requested", False))
-        if stopped:
+        if fatal_error:
+            self.log.append(f"\nUpgrade wegen internem Fehler beendet: {fatal_error}")
+            self.statusBar().showMessage("Upgrade mit Fehler beendet", 5000)
+        elif stopped:
             self.log.append("\nUpgrade-Lauf nach aktuellem Host gestoppt.")
             self.statusBar().showMessage("Upgrade gestoppt", 5000)
         else:
@@ -917,6 +931,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_sim_done(self):
+        fatal_error = getattr(self.clean_sim_worker, "fatal_error", None)
+        if fatal_error:
+            self.log.append(
+                f"\nAutoremove-Simulation wegen internem Fehler beendet: {fatal_error}"
+            )
+            self.act_stop.setEnabled(False)
+            for a in (
+                self.act_check,
+                self.act_sim,
+                self.act_upg,
+                self.act_clean,
+                self.act_reboot,
+                self.act_config,
+            ):
+                a.setEnabled(True)
+            self._clean_selected = []
+            return
+
         text = self.log.toPlainText()
         any_removals = (
             "würden entfernt" in text and "0 Pakete würden entfernt" not in text
@@ -983,8 +1015,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_clean_done(self):
+        fatal_error = getattr(self.clean_run_worker, "fatal_error", None)
         stopped = bool(getattr(self.clean_run_worker, "stop_requested", False))
-        if stopped:
+        if fatal_error:
+            self.log.append(
+                f"\nBereinigung wegen internem Fehler beendet: {fatal_error}"
+            )
+            self.statusBar().showMessage("Bereinigung mit Fehler beendet", 5000)
+        elif stopped:
             self.log.append("\nBereinigung nach aktuellem Host gestoppt.")
             self.statusBar().showMessage("Bereinigung gestoppt", 5000)
         else:
@@ -1045,7 +1083,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     def _on_reboot_done(self):
-        self.log.append("\nReboot-Befehle abgesetzt.")
+        fatal_error = getattr(self.reboot_worker, "fatal_error", None)
+        if fatal_error:
+            self.log.append(f"\nReboot wegen internem Fehler beendet: {fatal_error}")
+        else:
+            self.log.append("\nReboot-Befehle abgesetzt.")
+        self.act_stop.setEnabled(False)
         for a in (
             self.act_check,
             self.act_sim,
@@ -1155,32 +1198,40 @@ class _CheckWorker(QtCore.QThread):
     def __init__(self, host_ids: list | None = None):
         super().__init__()
         self.host_ids = host_ids
+        self.fatal_error = None
 
     def run(self):
-        import asyncio
-        from .core import db, ssh_client
+        try:
+            import asyncio
+            from .core import db, ssh_client
 
-        all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+            all_hosts = db.list_hosts()
+            hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
 
-        async def _job():
-            for h in hosts:
-                if not h.get("primary_ip") or not h.get("user"):
-                    self.one_result.emit(
-                        {
-                            "host_id": h["id"],
-                            "name": h.get("name", "?"),
-                            "status": "error",
-                            "note": "IP/User fehlt",
-                        }
-                    )
-                    continue
-                res = await ssh_client.check_updates_for_host(h)
-                res.setdefault("host_id", h["id"])
-                self.one_result.emit(res)
+            async def _job():
+                for h in hosts:
+                    if not h.get("primary_ip") or not h.get("user"):
+                        self.one_result.emit(
+                            {
+                                "host_id": h["id"],
+                                "name": h.get("name", "?"),
+                                "status": "error",
+                                "note": "IP/User fehlt",
+                            }
+                        )
+                        continue
+                    res = await ssh_client.check_updates_for_host(h)
+                    res.setdefault("host_id", h["id"])
+                    self.one_result.emit(res)
 
-        asyncio.run(_job())
-        self.finished_all.emit()
+            asyncio.run(_job())
+        except Exception as ex:
+            self.fatal_error = f"{type(ex).__name__}: {ex}"
+            self.one_result.emit(
+                {"status": "error", "name": "CheckWorker", "note": f"Interner Fehler: {ex}"}
+            )
+        finally:
+            self.finished_all.emit()
 
 
 class _SimWorker(QtCore.QThread):
@@ -1190,57 +1241,50 @@ class _SimWorker(QtCore.QThread):
     def __init__(self, host_ids: list | None = None):
         super().__init__()
         self.host_ids = host_ids
+        self.fatal_error = None
 
     def run(self):
-        from .core import db, ssh_client
-        import asyncio
-        import traceback
-
-        all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
-
-        async def _job():
-            for h in hosts:
-                if not h.get("primary_ip") or not h.get("user"):
-                    self.one_result.emit(
-                        {
-                            "host_id": h["id"],
-                            "name": h.get("name", "?"),
-                            "status": "error",
-                            "note": "IP/User fehlt",
-                        }
-                    )
-                    continue
-                try:
-                    res = await ssh_client.simulate_upgrade_for_host(h)
-                    res.setdefault("host_id", h["id"])
-                    self.one_result.emit(res)
-                except Exception as ex:
-                    self.one_result.emit(
-                        {
-                            "host_id": h["id"],
-                            "name": h.get("name", "?"),
-                            "status": "error",
-                            "note": f"Sim-Fehler: {ex}",
-                        }
-                    )
-
-        loop = asyncio.new_event_loop()
         try:
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(_job())
-        except Exception:
+            from .core import db, ssh_client
+            import asyncio
+
+            all_hosts = db.list_hosts()
+            hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+
+            async def _job():
+                for h in hosts:
+                    if not h.get("primary_ip") or not h.get("user"):
+                        self.one_result.emit(
+                            {
+                                "host_id": h["id"],
+                                "name": h.get("name", "?"),
+                                "status": "error",
+                                "note": "IP/User fehlt",
+                            }
+                        )
+                        continue
+                    try:
+                        res = await ssh_client.simulate_upgrade_for_host(h)
+                        res.setdefault("host_id", h["id"])
+                        self.one_result.emit(res)
+                    except Exception as ex:
+                        self.one_result.emit(
+                            {
+                                "host_id": h["id"],
+                                "name": h.get("name", "?"),
+                                "status": "error",
+                                "note": f"Sim-Fehler: {ex}",
+                            }
+                        )
+
+            asyncio.run(_job())
+        except Exception as ex:
+            self.fatal_error = f"{type(ex).__name__}: {ex}"
             self.one_result.emit(
-                {
-                    "status": "error",
-                    "name": "SimWorker",
-                    "note": "Uncaught: " + traceback.format_exc(limit=1),
-                }
+                {"status": "error", "name": "SimWorker", "note": f"Interner Fehler: {ex}"}
             )
         finally:
-            loop.close()
-
-        self.finished_all.emit()
+            self.finished_all.emit()
 
 
 class _UpgradeWorker(QtCore.QThread):
@@ -1253,58 +1297,66 @@ class _UpgradeWorker(QtCore.QThread):
         super().__init__()
         self.host_ids = host_ids
         self.stop_requested = False
+        self.fatal_error = None
 
     def request_stop(self):
         self.stop_requested = True
 
     def run(self):
-        import asyncio
-        from .core import db, ssh_client
+        try:
+            import asyncio
+            from .core import db, ssh_client
 
-        all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+            all_hosts = db.list_hosts()
+            hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
 
-        async def _job():
-            for h in hosts:
-                if self.stop_requested:
-                    break
+            async def _job():
+                for h in hosts:
+                    if self.stop_requested:
+                        break
 
-                name = h.get("name", "?")
-                self.host_started.emit({"host_id": h["id"], "name": name})
+                    name = h.get("name", "?")
+                    self.host_started.emit({"host_id": h["id"], "name": name})
 
-                if not h.get("primary_ip") or not h.get("user"):
-                    self.host_done.emit(
-                        {
-                            "host_id": h["id"],
-                            "name": name,
-                            "status": "error",
-                            "note": "IP/User fehlt",
-                        }
-                    )
-                    continue
-                try:
-                    agen = ssh_client.upgrade_host_stream(h)
-                    async for msg in agen:
-                        if not isinstance(msg, dict):
-                            continue
-                        if msg.get("type") == "line":
-                            self.progress.emit({"name": name, "line": msg["line"]})
-                        elif msg.get("type") == "result":
-                            res = msg["result"] or {}
-                            res.update({"host_id": h["id"], "name": name})
-                            self.host_done.emit(res)
-                except Exception as ex:
-                    self.host_done.emit(
-                        {
-                            "host_id": h["id"],
-                            "name": name,
-                            "status": "error",
-                            "note": str(ex),
-                        }
-                    )
+                    if not h.get("primary_ip") or not h.get("user"):
+                        self.host_done.emit(
+                            {
+                                "host_id": h["id"],
+                                "name": name,
+                                "status": "error",
+                                "note": "IP/User fehlt",
+                            }
+                        )
+                        continue
+                    try:
+                        agen = ssh_client.upgrade_host_stream(h)
+                        async for msg in agen:
+                            if not isinstance(msg, dict):
+                                continue
+                            if msg.get("type") == "line":
+                                self.progress.emit({"name": name, "line": msg["line"]})
+                            elif msg.get("type") == "result":
+                                res = msg["result"] or {}
+                                res.update({"host_id": h["id"], "name": name})
+                                self.host_done.emit(res)
+                    except Exception as ex:
+                        self.host_done.emit(
+                            {
+                                "host_id": h["id"],
+                                "name": name,
+                                "status": "error",
+                                "note": str(ex),
+                            }
+                        )
 
-        asyncio.run(_job())
-        self.finished_all.emit()
+            asyncio.run(_job())
+        except Exception as ex:
+            self.fatal_error = f"{type(ex).__name__}: {ex}"
+            self.host_done.emit(
+                {"status": "error", "name": "UpgradeWorker", "note": f"Interner Fehler: {ex}"}
+            )
+        finally:
+            self.finished_all.emit()
 
 
 class _CleanSimWorker(QtCore.QThread):
@@ -1314,21 +1366,29 @@ class _CleanSimWorker(QtCore.QThread):
     def __init__(self, host_ids: list[int]):
         super().__init__()
         self.host_ids = host_ids
+        self.fatal_error = None
 
     def run(self):
-        import asyncio
-        from .core import db, ssh_client
+        try:
+            import asyncio
+            from .core import db, ssh_client
 
-        all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if h["id"] in self.host_ids]
+            all_hosts = db.list_hosts()
+            hosts = [h for h in all_hosts if h["id"] in self.host_ids]
 
-        async def _job():
-            for h in hosts:
-                res = await ssh_client.simulate_autoremove_for_host(h)
-                self.one_result.emit(res)
+            async def _job():
+                for h in hosts:
+                    res = await ssh_client.simulate_autoremove_for_host(h)
+                    self.one_result.emit(res)
 
-        asyncio.run(_job())
-        self.finished_all.emit()
+            asyncio.run(_job())
+        except Exception as ex:
+            self.fatal_error = f"{type(ex).__name__}: {ex}"
+            self.one_result.emit(
+                {"status": "error", "name": "CleanSimWorker", "note": f"Interner Fehler: {ex}"}
+            )
+        finally:
+            self.finished_all.emit()
 
 
 class _CleanRunWorker(QtCore.QThread):
@@ -1341,46 +1401,54 @@ class _CleanRunWorker(QtCore.QThread):
         super().__init__()
         self.host_ids = host_ids
         self.stop_requested = False
+        self.fatal_error = None
 
     def request_stop(self):
         self.stop_requested = True
 
     def run(self):
-        import asyncio
-        from .core import db, ssh_client
+        try:
+            import asyncio
+            from .core import db, ssh_client
 
-        all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if h["id"] in self.host_ids]
+            all_hosts = db.list_hosts()
+            hosts = [h for h in all_hosts if h["id"] in self.host_ids]
 
-        async def _job():
-            for h in hosts:
-                if self.stop_requested:
-                    break
+            async def _job():
+                for h in hosts:
+                    if self.stop_requested:
+                        break
 
-                name = h.get("name", "?")
-                self.host_started.emit({"host_id": h["id"], "name": name})
+                    name = h.get("name", "?")
+                    self.host_started.emit({"host_id": h["id"], "name": name})
 
-                try:
-                    agen = ssh_client.autoremove_host_stream(h)
-                    async for msg in agen:
-                        if isinstance(msg, dict) and msg.get("type") == "line":
-                            self.progress.emit({"name": name, "line": msg["line"]})
-                        elif isinstance(msg, dict) and msg.get("type") == "result":
-                            res = msg["result"] or {}
-                            res.update({"host_id": h["id"], "name": name})
-                            self.host_done.emit(res)
-                except Exception as ex:
-                    self.host_done.emit(
-                        {
-                            "host_id": h["id"],
-                            "name": name,
-                            "status": "error",
-                            "note": str(ex),
-                        }
-                    )
+                    try:
+                        agen = ssh_client.autoremove_host_stream(h)
+                        async for msg in agen:
+                            if isinstance(msg, dict) and msg.get("type") == "line":
+                                self.progress.emit({"name": name, "line": msg["line"]})
+                            elif isinstance(msg, dict) and msg.get("type") == "result":
+                                res = msg["result"] or {}
+                                res.update({"host_id": h["id"], "name": name})
+                                self.host_done.emit(res)
+                    except Exception as ex:
+                        self.host_done.emit(
+                            {
+                                "host_id": h["id"],
+                                "name": name,
+                                "status": "error",
+                                "note": str(ex),
+                            }
+                        )
 
-        asyncio.run(_job())
-        self.finished_all.emit()
+            asyncio.run(_job())
+        except Exception as ex:
+            self.fatal_error = f"{type(ex).__name__}: {ex}"
+            self.host_done.emit(
+                {"status": "error", "name": "CleanRunWorker", "note": f"Interner Fehler: {ex}"}
+            )
+        finally:
+            self.finished_all.emit()
 
 
 class _RebootWorker(QtCore.QThread):
@@ -1390,35 +1458,37 @@ class _RebootWorker(QtCore.QThread):
     def __init__(self, host_ids: list[int] | None = None):
         super().__init__()
         self.host_ids = host_ids or []
+        self.fatal_error = None
 
     def run(self):
-        from .core import db, ssh_client
-        import asyncio
-
-        all_hosts = db.list_hosts()
-        hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
-
-        async def _job():
-            for h in hosts:
-                try:
-                    res = await ssh_client.reboot_host(h)
-                    res.setdefault("host_id", h["id"])
-                    self.host_done.emit(res)
-                except Exception as ex:
-                    self.host_done.emit(
-                        {
-                            "host_id": h["id"],
-                            "name": h.get("name", "?"),
-                            "status": "error",
-                            "note": f"Reboot-Fehler: {ex}",
-                        }
-                    )
-
-        loop = asyncio.new_event_loop()
         try:
-            asyncio.set_event_loop(loop)
-            loop.run_until_complete(_job())
-        finally:
-            loop.close()
+            from .core import db, ssh_client
+            import asyncio
 
-        self.finished_all.emit()
+            all_hosts = db.list_hosts()
+            hosts = [h for h in all_hosts if not self.host_ids or h["id"] in self.host_ids]
+
+            async def _job():
+                for h in hosts:
+                    try:
+                        res = await ssh_client.reboot_host(h)
+                        res.setdefault("host_id", h["id"])
+                        self.host_done.emit(res)
+                    except Exception as ex:
+                        self.host_done.emit(
+                            {
+                                "host_id": h["id"],
+                                "name": h.get("name", "?"),
+                                "status": "error",
+                                "note": f"Reboot-Fehler: {ex}",
+                            }
+                        )
+
+            asyncio.run(_job())
+        except Exception as ex:
+            self.fatal_error = f"{type(ex).__name__}: {ex}"
+            self.host_done.emit(
+                {"status": "error", "name": "RebootWorker", "note": f"Interner Fehler: {ex}"}
+            )
+        finally:
+            self.finished_all.emit()
