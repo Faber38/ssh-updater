@@ -1,7 +1,13 @@
 from __future__ import annotations
-import asyncio, asyncssh, re
+import asyncio, asyncssh, logging, re
+from collections import deque
 from typing import Dict, Any, Tuple
 from . import db
+
+logger = logging.getLogger(__name__)
+
+UPGRADE_FAILURE_BUFFER_LINES = 20
+UPGRADE_FAILURE_LINE_LENGTH = 1000
 
 def _auth_params(host: Dict[str, Any]) -> Dict[str, Any]:
     params: Dict[str, Any] = {}
@@ -309,6 +315,7 @@ async def upgrade_host_stream(host: Dict[str, Any]):
                 return
 
             rc = 0
+            recent_output = deque(maxlen=UPGRADE_FAILURE_BUFFER_LINES)
             async for line in gen:
                 # Zeilen streamen
                 if line.startswith("[RC="):
@@ -318,10 +325,31 @@ async def upgrade_host_stream(host: Dict[str, Any]):
                     except Exception:
                         rc = 0
                 else:
+                    recent_output.append(line[:UPGRADE_FAILURE_LINE_LENGTH])
                     yield {"type": "line", "line": line}
 
+            if rc != 0:
+                step = {
+                    "debian": "apt-get dist-upgrade",
+                    "rpm": "dnf upgrade",
+                    "arch": "pacman -Syu",
+                }.get(distro, f"{distro} upgrade")
+                output = "\n".join(recent_output) or "(keine Remote-Ausgabe)"
+                logger.error(
+                    "Upgrade fehlgeschlagen: host=%s, schritt=%s, exitcode=%d; "
+                    "letzte %d Ausgabelinien:\n%s",
+                    name,
+                    step,
+                    rc,
+                    len(recent_output),
+                    output,
+                )
+
             # Finales Ergebnis liefern
-            yield {"type": "result", "result": {"status": "ok" if rc == 0 else "error", "note": f"rc={rc}", "distro": distro}}
+            note = f"rc={rc}"
+            if rc != 0 and recent_output:
+                note += f"; letzte Ausgabe: {recent_output[-1][:200]}"
+            yield {"type": "result", "result": {"status": "ok" if rc == 0 else "error", "note": note, "distro": distro}}
             return
     except (asyncssh.Error, OSError) as e:
         yield {"type": "result", "result": {"status": "error", "note": f"SSH: {e}"}}
