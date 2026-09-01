@@ -69,6 +69,9 @@ def get_setting(key: str, default: Any=None) -> Any:
 
 # -------- Hosts DAO --------
 
+class HostNotFoundError(LookupError):
+    pass
+
 def add_or_update_host(
     *,
     proxmox_uid: Optional[str],
@@ -118,6 +121,48 @@ def add_or_update_host(
     con.commit(); con.close()
     return host_id
 
+def update_host(
+    host_id: int,
+    *,
+    name: str,
+    primary_ip: Optional[str],
+    port: int = 22,
+    user: Optional[str] = None,
+    auth_method: str = "key",
+    key_path: Optional[str] = None,
+    password_plain: Optional[str] = None,
+) -> None:
+    """Aktualisiert die editierbaren Felder eines Hosts ausschließlich über seine ID."""
+    password_enc = crypto.encrypt_str(password_plain) if password_plain else None
+    con = _connect()
+    try:
+        cur = con.execute(
+            """
+            UPDATE hosts SET
+                name=?, primary_ip=?, port=?, user=?, auth_method=?, key_path=?,
+                password_enc=COALESCE(?, password_enc)
+            WHERE id=?
+            """,
+            (
+                name,
+                primary_ip,
+                port,
+                user,
+                auth_method,
+                key_path,
+                password_enc,
+                host_id,
+            ),
+        )
+        if cur.rowcount != 1:
+            con.rollback()
+            raise HostNotFoundError(
+                f"Host mit ID {host_id} wurde nicht gefunden oder nicht eindeutig aktualisiert."
+            )
+        con.commit()
+    finally:
+        con.close()
+
 def list_hosts() -> List[Dict[str, Any]]:
     con = _connect()
     cur = con.execute("SELECT * FROM hosts ORDER BY name")
@@ -154,4 +199,3 @@ def set_check_result(host_id: int, last_check: str, pending_updates: int | None)
     )
     con.commit()
     con.close()
-

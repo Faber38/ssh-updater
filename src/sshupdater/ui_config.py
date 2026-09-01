@@ -228,22 +228,16 @@ class ConfigDialog(QDialog):
         dlg = HostEditDialog(self, host)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             h = dlg.result_host
-            # Upsert (identifiziert über id → wir nutzen proxmox_uid/name)
-            db.add_or_update_host(
-                proxmox_uid=host.get("proxmox_uid"),
+            db.update_host(
+                host["id"],
                 name=h["name"],
                 primary_ip=h["primary_ip"],
-                ips=None,
                 port=h["port"],
                 user=h["user"],
                 auth_method=h["auth_method"],
                 key_path=h["key_path"],
-                password_plain=None,  # Passwort separat, nur wenn geändert
-                distro=host.get("distro"),
-                tags=None,
+                password_plain=h["password_plain"],
             )
-            if h["password_plain"]:
-                db.set_host_password(host["id"], h["password_plain"])
             self._reload()
 
     def _delete(self):
