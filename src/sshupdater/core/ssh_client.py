@@ -390,7 +390,7 @@ async def autoremove_host_stream(host: Dict[str, Any]):
 # ---------- Reboot ----------
 
 async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
-    """Löst einen Reboot auf dem Zielhost aus (fire-and-forget)."""
+    """Plant einen leicht verzögerten Reboot und bestätigt dessen Exitcode."""
     name = host.get("name") or f"id:{host['id']}"
     ip = host.get("primary_ip")
     port = int(host.get("port") or 22)
@@ -401,18 +401,36 @@ async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
     params = _auth_params(host)
     try:
         async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
-            # Fire-and-forget: Command im Hintergrund starten und gleich zurückkehren
-            cmd = "bash -lc 'nohup sudo -n systemctl reboot >/dev/null 2>&1 & disown; echo TRIGGERED'"
-            code, out, err = await _run(conn, cmd, timeout=10)
-            if code == 0 and "TRIGGERED" in (out or ""):
-                return {"host_id": host["id"], "name": name, "status": "ok", "note": "Reboot ausgelöst"}
+            code, _, err = await _run(conn, "command -v systemd-run", timeout=10)
+            if code == 124:
+                return {
+                    "host_id": host["id"], "name": name, "status": "error",
+                    "note": "Reboot konnte nicht bestätigt werden: Zeitüberschreitung bei der Prüfung auf systemd-run.",
+                }
+            if code != 0:
+                return {
+                    "host_id": host["id"], "name": name, "status": "error",
+                    "note": "Reboot konnte nicht bestätigt werden: systemd-run ist nicht verfügbar.",
+                }
+
+            prefix = "" if user == "root" else "sudo -n "
+            cmd = f"{prefix}systemd-run --quiet --on-active=2s systemctl reboot"
+            code, _, err = await _run(conn, cmd, timeout=10)
+            if code == 0:
+                return {
+                    "host_id": host["id"], "name": name, "status": "ok",
+                    "note": "Reboot erfolgreich eingeplant",
+                }
+
+            if code == 124:
+                note = "Reboot konnte nicht bestätigt werden: Zeitüberschreitung beim Einplanen."
             else:
-                # Fallback versuchen
-                cmd2 = "bash -lc 'nohup sudo -n reboot >/dev/null 2>&1 & disown; echo TRIGGERED'"
-                code2, out2, err2 = await _run(conn, cmd2, timeout=10)
-                if code2 == 0 and "TRIGGERED" in (out2 or ""):
-                    return {"host_id": host["id"], "name": name, "status": "ok", "note": "Reboot ausgelöst"}
-                return {"host_id": host["id"], "name": name, "status": "error", "note": (err or err2 or 'Unbekannter Fehler')}
+                detail = (err or "").strip().splitlines()
+                suffix = f": {detail[0][:300]}" if detail else ""
+                note = f"Reboot konnte nicht eingeplant werden (Exitcode {code}){suffix}"
+            return {"host_id": host["id"], "name": name, "status": "error", "note": note}
     except (asyncssh.Error, OSError) as e:
-        # Wenn die Verbindung sofort gekappt wird, war der Reboot sehr wahrscheinlich erfolgreich
-        return {"host_id": host["id"], "name": name, "status": "ok", "note": f"Reboot (verbindung beendet): {e}"}
+        return {
+            "host_id": host["id"], "name": name, "status": "error",
+            "note": f"Reboot konnte nicht bestätigt werden: SSH: {e}",
+        }
