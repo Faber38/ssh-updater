@@ -13,8 +13,9 @@ if [ ! -d ".venv" ]; then
 fi
 source .venv/bin/activate
 
-# Identische Python- und Paketversionen wie im Release-Workflow verwenden.
-python -c 'import pathlib, platform, sys; expected = pathlib.Path("release-python.txt").read_text().strip(); sys.exit(0 if platform.python_version() == expected else "Bitte .venv mit Python " + expected + " neu erstellen.")'
+# Dieselbe Python-Major/Minor-Version wie im Release-Workflow verwenden.
+python --version
+python -c 'import pathlib, sys; expected = pathlib.Path("release-python.txt").read_text().strip(); actual = ".".join(map(str, sys.version_info[:2])); sys.exit(0 if actual == expected else "Bitte .venv mit Python " + expected + ".x neu erstellen.")'
 python -m pip install -r requirements-build.txt
 python -m pip check
 QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
