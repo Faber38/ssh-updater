@@ -2,24 +2,12 @@ from __future__ import annotations
 import asyncio, asyncssh, logging, re
 from collections import deque
 from typing import Dict, Any, Tuple
-from . import db
+from .ssh_connection import connect_host
 
 logger = logging.getLogger(__name__)
 
 UPGRADE_FAILURE_BUFFER_LINES = 20
 UPGRADE_FAILURE_LINE_LENGTH = 1000
-
-def _auth_params(host: Dict[str, Any]) -> Dict[str, Any]:
-    params: Dict[str, Any] = {}
-    if host.get("auth_method") == "password":
-        pw = db.get_host_password(host["id"])
-        if pw:
-            params["password"] = pw
-    else:
-        key_path = host.get("key_path")
-        if key_path:
-            params["client_keys"] = [key_path]
-    return params
 
 async def _run(conn: asyncssh.SSHClientConnection, cmd: str, timeout: int = 90) -> Tuple[int, str, str]:
     try:
@@ -114,9 +102,8 @@ async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
-    params = _auth_params(host)
     try:
-        async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
+        async with connect_host(host) as conn:
             distro = await _detect_distro(conn)
             if distro == "debian":
                 n, note = await _check_debian(conn)
@@ -179,9 +166,8 @@ async def simulate_upgrade_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
-    params = _auth_params(host)
     try:
-        async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
+        async with connect_host(host) as conn:
             distro = await _detect_distro(conn)
             if distro == "debian":
                 n, details, note = await _sim_debian(conn)
@@ -298,9 +284,8 @@ async def upgrade_host_stream(host: Dict[str, Any]):
         yield {"type": "result", "result": {"status": "error", "note": "IP/User fehlt"}}
         return
 
-    params = _auth_params(host)
     try:
-        async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
+        async with connect_host(host) as conn:
             distro = await _detect_distro(conn)
             # nur sudo verwenden, wenn wir NICHT als root eingeloggt sind
             use_sudo = (user != "root")
@@ -373,9 +358,8 @@ async def simulate_autoremove_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
-    params = _auth_params(host)
     try:
-        async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
+        async with connect_host(host) as conn:
             distro = await _detect_distro(conn)
             if distro != "debian":
                 return {"host_id": host["id"], "name": name, "status": "error", "note": "Autoremove nur Debian implementiert"}
@@ -395,9 +379,8 @@ async def autoremove_host_stream(host: Dict[str, Any]):
     if not ip or not user:
         yield {"type": "result", "result": {"status": "error", "note": "IP/User fehlt"}}
         return
-    params = _auth_params(host)
     try:
-        async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
+        async with connect_host(host) as conn:
             distro = await _detect_distro(conn)
             if distro != "debian":
                 yield {"type": "result", "result": {"status": "error", "note": "Autoremove nur Debian implementiert"}}
@@ -426,9 +409,8 @@ async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
-    params = _auth_params(host)
     try:
-        async with asyncssh.connect(ip, port=port, username=user, known_hosts=None, **params) as conn:
+        async with connect_host(host) as conn:
             code, _, err = await _run(conn, "command -v systemd-run", timeout=10)
             if code == 124:
                 return {

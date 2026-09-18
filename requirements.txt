@@ -1,6 +1,17 @@
 PyQt6==6.7.1
-asyncssh==2.14.2
-cryptography==43.0.1
+asyncssh==2.24.0
+cryptography==50.0.1
 proxmoxer==2.0.1
 requests==2.32.3
-psutil
+psutil==7.2.2
+
+# Runtime dependency closure for release-python.txt (Linux/Windows x86_64).
+PyQt6-Qt6==6.7.3
+PyQt6-sip==13.12.0
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+idna==3.20
+pycparser==3.0
+typing-extensions==4.16.0
+urllib3==2.8.0

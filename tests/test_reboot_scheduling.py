@@ -47,9 +47,8 @@ class RebootSchedulingTests(unittest.IsolatedAsyncioTestCase):
 
         run = mock.AsyncMock(side_effect=responses)
         with (
-            mock.patch.object(self.ssh_client, "_auth_params", return_value={}),
             mock.patch.object(
-                self.ssh_client.asyncssh, "connect", return_value=ConnectionContext()
+                self.ssh_client, "connect_host", return_value=ConnectionContext()
             ),
             mock.patch.object(self.ssh_client, "_run", new=run),
         ):
@@ -81,10 +80,9 @@ class RebootSchedulingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_asyncssh_error_is_never_success(self):
         with (
-            mock.patch.object(self.ssh_client, "_auth_params", return_value={}),
             mock.patch.object(
-                self.ssh_client.asyncssh,
-                "connect",
+                self.ssh_client,
+                "connect_host",
                 side_effect=self.ssh_client.asyncssh.DisconnectError(10, "Verbindung fehlgeschlagen"),
             ),
         ):

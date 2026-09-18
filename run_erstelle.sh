@@ -13,24 +13,18 @@ if [ ! -d ".venv" ]; then
 fi
 source .venv/bin/activate
 
-# Abhängigkeiten prüfen
-echo "Installiere/aktualisiere Abhängigkeiten ..."
-pip install --upgrade pip wheel pyinstaller cryptography
-
-# Vorherige Builds löschen
-echo "Bereinige alte Build-Dateien ..."
-rm -rf src/build src/dist ssh-updater.spec
+# Identische Python- und Paketversionen wie im Release-Workflow verwenden.
+python -c 'import pathlib, platform, sys; expected = pathlib.Path("release-python.txt").read_text().strip(); sys.exit(0 if platform.python_version() == expected else "Bitte .venv mit Python " + expected + " neu erstellen.")'
+python -m pip install -r requirements-build.txt
+python -m pip check
+QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
 
 # Build starten
 echo "Erstelle One-File-Binary ..."
-pyinstaller --onefile --noconfirm \
-  --name ssh-updater \
-  --paths src \
-  --add-data "src/sshupdater/assets/qss:assets/qss" \
-  src/sshupdater/app.py
+python -m PyInstaller ssh-updater.spec --noconfirm
 
 # Fertiges Binary anzeigen
 echo
 echo "Build abgeschlossen ✅"
-echo "Datei: $(realpath src/dist/ssh-updater)"
+echo "Datei: $(realpath dist/ssh-updater)"
 echo "──────────────────────────────────────────────"

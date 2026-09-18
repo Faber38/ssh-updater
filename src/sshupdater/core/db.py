@@ -3,9 +3,13 @@ import json, sqlite3
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from .settings import DB_PATH
-from . import crypto
+from . import crypto, storage
 
 def _connect() -> sqlite3.Connection:
+    storage.secure_directory(DB_PATH.parent)
+    storage.secure_file(DB_PATH, create=True)
+    for suffix in ('-journal', '-wal', '-shm'):
+        storage.secure_file(Path(str(DB_PATH) + suffix))
     con = sqlite3.connect(DB_PATH)
     con.row_factory = sqlite3.Row
     return con
@@ -72,93 +76,90 @@ def get_setting(key: str, default: Any=None) -> Any:
 class HostNotFoundError(LookupError):
     pass
 
+class CredentialChangeRequired(ValueError):
+    pass
+
+
+def target_changed(old, new):
+    return any((old.get(k) or default) != (new.get(k) or default)
+               for k, default in (("primary_ip", ""), ("user", "root"), ("port", 22)))
+
+
+def _password_value(old, new, password_plain, delete_password, keep_password):
+    if delete_password and password_plain:
+        raise CredentialChangeRequired("Passwort entweder ersetzen oder löschen.")
+    if password_plain:
+        return crypto.encrypt_str(password_plain)
+    if delete_password:
+        return None
+    if old and old.get("password_enc") is not None:
+        if target_changed(old, new):
+            raise CredentialChangeRequired(
+                "Host, Benutzer oder Port geändert: Passwort erneut eingeben oder löschen.")
+        if (old.get("auth_method") == "password" and new["auth_method"] == "key"
+                and keep_password is not True):
+            raise CredentialChangeRequired("Bitte entscheiden, ob das alte Passwort behalten wird.")
+        return old["password_enc"]
+    return None
+
+
 def add_or_update_host(
-    *,
-    proxmox_uid: Optional[str],
-    name: str,
-    primary_ip: Optional[str],
-    ips: Optional[List[str]] = None,
-    port: int = 22,
-    user: Optional[str] = None,
-    auth_method: str = "key",
-    key_path: Optional[str] = None,
-    password_plain: Optional[str] = None,
-    distro: Optional[str] = None,
-    tags: Optional[List[str]] = None,
+    *, proxmox_uid: Optional[str], name: str, primary_ip: Optional[str],
+    ips: Optional[List[str]] = None, port: int = 22, user: Optional[str] = None,
+    auth_method: str = "key", key_path: Optional[str] = None,
+    password_plain: Optional[str] = None, distro: Optional[str] = None,
+    tags: Optional[List[str]] = None, delete_password: bool = False,
+    keep_password: Optional[bool] = None,
 ) -> int:
-    """Upsert per proxmox_uid (falls vorhanden), sonst per name."""
-    con = _connect()
-    ips_json = json.dumps(ips or [])
-    tags_json = json.dumps(tags or [])
-    password_enc = crypto.encrypt_str(password_plain) if password_plain else None
-
-    # Prüfen, ob vorhanden
-    if proxmox_uid:
-        cur = con.execute("SELECT id FROM hosts WHERE proxmox_uid=?", (proxmox_uid,))
-        row = cur.fetchone()
-    else:
-        cur = con.execute("SELECT id FROM hosts WHERE name=?", (name,))
-        row = cur.fetchone()
-
-    if row:
-        host_id = row["id"]
-        con.execute("""
-            UPDATE hosts SET
-                name=?, primary_ip=?, ips_json=?, port=?,
-                user=?, auth_method=?, key_path=?,
-                password_enc=COALESCE(?, password_enc),
-                distro=?, tags_json=?
-            WHERE id=?
-        """, (name, primary_ip, ips_json, port, user, auth_method, key_path,
-              password_enc, distro, tags_json, host_id))
-    else:
-        cur = con.execute("""
-            INSERT INTO hosts(proxmox_uid,name,primary_ip,ips_json,port,user,auth_method,key_path,password_enc,distro,tags_json)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)
-        """, (proxmox_uid, name, primary_ip, ips_json, port, user, auth_method, key_path, password_enc, distro, tags_json))
-        host_id = cur.lastrowid
-
-    con.commit(); con.close()
-    return host_id
-
-def update_host(
-    host_id: int,
-    *,
-    name: str,
-    primary_ip: Optional[str],
-    port: int = 22,
-    user: Optional[str] = None,
-    auth_method: str = "key",
-    key_path: Optional[str] = None,
-    password_plain: Optional[str] = None,
-) -> None:
-    """Aktualisiert die editierbaren Felder eines Hosts ausschließlich über seine ID."""
-    password_enc = crypto.encrypt_str(password_plain) if password_plain else None
+    """Upsert with the same credential policy as the explicit edit path."""
     con = _connect()
     try:
-        cur = con.execute(
-            """
-            UPDATE hosts SET
-                name=?, primary_ip=?, port=?, user=?, auth_method=?, key_path=?,
-                password_enc=COALESCE(?, password_enc)
-            WHERE id=?
-            """,
-            (
-                name,
-                primary_ip,
-                port,
-                user,
-                auth_method,
-                key_path,
-                password_enc,
-                host_id,
-            ),
-        )
-        if cur.rowcount != 1:
-            con.rollback()
-            raise HostNotFoundError(
-                f"Host mit ID {host_id} wurde nicht gefunden oder nicht eindeutig aktualisiert."
-            )
+        con.execute("BEGIN IMMEDIATE")
+        if proxmox_uid:
+            rows = con.execute("SELECT * FROM hosts WHERE proxmox_uid=?", (proxmox_uid,)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM hosts WHERE name=?", (name,)).fetchall()
+        if len(rows) > 1:
+            raise CredentialChangeRequired("Hostname ist nicht eindeutig. Bitte vorhandenen Host bearbeiten.")
+        old = dict(rows[0]) if rows else None
+        new = dict(primary_ip=primary_ip, port=port, user=user, auth_method=auth_method)
+        token = _password_value(old, new, password_plain, delete_password, keep_password)
+        values = (name, primary_ip, json.dumps(ips or []), port, user,
+                  auth_method, key_path, token, distro, json.dumps(tags or []))
+        if old:
+            host_id = old["id"]
+            con.execute("""UPDATE hosts SET name=?, primary_ip=?, ips_json=?, port=?, user=?,
+                auth_method=?, key_path=?, password_enc=?, distro=?, tags_json=? WHERE id=?""",
+                values + (host_id,))
+        else:
+            cur = con.execute("""INSERT INTO hosts(name,primary_ip,ips_json,port,user,
+                auth_method,key_path,password_enc,distro,tags_json,proxmox_uid)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?)""", values + (proxmox_uid,))
+            host_id = cur.lastrowid
+        con.commit()
+        return host_id
+    finally:
+        con.close()
+
+
+def update_host(
+    host_id: int, *, name: str, primary_ip: Optional[str], port: int = 22,
+    user: Optional[str] = None, auth_method: str = "key",
+    key_path: Optional[str] = None, password_plain: Optional[str] = None,
+    delete_password: bool = False, keep_password: Optional[bool] = None,
+) -> None:
+    """Change target and credentials atomically, preserving unrelated metadata."""
+    con = _connect()
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        row = con.execute("SELECT * FROM hosts WHERE id=?", (host_id,)).fetchone()
+        if row is None:
+            raise HostNotFoundError(f"Host mit ID {host_id} wurde nicht gefunden.")
+        new = dict(primary_ip=primary_ip, port=port, user=user, auth_method=auth_method)
+        token = _password_value(dict(row), new, password_plain, delete_password, keep_password)
+        con.execute("""UPDATE hosts SET name=?, primary_ip=?, port=?, user=?,
+            auth_method=?, key_path=?, password_enc=? WHERE id=?""",
+            (name, primary_ip, port, user, auth_method, key_path, token, host_id))
         con.commit()
     finally:
         con.close()

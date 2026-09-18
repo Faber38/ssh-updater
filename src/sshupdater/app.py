@@ -15,6 +15,11 @@ def resource_path(*parts):
 
 def main():
     app = QtWidgets.QApplication(sys.argv)
+    try:
+        settings.initialize()
+    except (OSError, ValueError) as e:
+        QMessageBox.critical(None, "Datenspeicher nicht sicher zugänglich", str(e))
+        return 1
 
     # Theme laden nach Einstellung
     qss = None
@@ -31,7 +36,11 @@ def main():
     # --- Masterpasswort-Handling ------------------------------------------------
 
     # Prüfen, ob Keystore bereits existiert (Erstlauf?)
-    first_run = not crypto.keystore_exists()
+    try:
+        first_run = not crypto.keystore_exists()
+    except OSError as e:
+        QMessageBox.critical(None, 'Vault nicht verfügbar', str(e))
+        return 1
 
     # Passwort abfragen (Erstlauf = mit Bestätigung)
     pw, ok = QInputDialog.getText(

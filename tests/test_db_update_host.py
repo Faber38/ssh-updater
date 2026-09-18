@@ -29,7 +29,8 @@ class UpdateHostTests(unittest.TestCase):
 
     def setUp(self):
         self._tempdir = tempfile.TemporaryDirectory()
-        self.db.DB_PATH = Path(self._tempdir.name) / "test.db"
+        self._db_path = mock.patch.object(self.db, "DB_PATH", Path(self._tempdir.name) / "test.db")
+        self._db_path.start()
         self.db.init_db()
 
         self._encrypt = mock.patch.object(
@@ -48,6 +49,7 @@ class UpdateHostTests(unittest.TestCase):
     def tearDown(self):
         self._decrypt.stop()
         self._encrypt.stop()
+        self._db_path.stop()
         self._tempdir.cleanup()
 
     def _insert_host(self):

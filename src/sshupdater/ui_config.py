@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QLabel,
 )
-from .core import db, settings
+from .core import db, settings, storage
 
 
 class HostEditDialog(QDialog):
@@ -38,6 +38,7 @@ class HostEditDialog(QDialog):
         self.in_auth.addItems(["key", "password"])
         self.in_auth.setCurrentText(self._host.get("auth_method", "key"))
         self.in_key = QLineEdit(self._host.get("key_path", "") or "")
+        self.in_key.setPlaceholderText("Leer: SSH-Konfiguration / Standard-Keys / lokaler Agent")
         btn_key = QPushButton("…")
         btn_key.clicked.connect(self._choose_key)
         key_row = QHBoxLayout()
@@ -65,7 +66,7 @@ class HostEditDialog(QDialog):
         form.addRow("Passwort", self.in_pwd)
         lay.addLayout(form)
 
-        hint = QLabel("Tipp: SSH-Keys sind sicherer als Passwörter.")
+        hint = QLabel("SSH-Key: gewählte Datei, sonst SSH-Konfiguration / Standard-Keys / lokaler Agent.\nAgent-Forwarding ist immer deaktiviert.")
         hint.setStyleSheet("color:#aaa;")
         lay.addWidget(hint)
 
@@ -110,6 +111,42 @@ class HostEditDialog(QDialog):
             "distro": self._host.get("distro"),
             "tags": None,  # später
         }
+        self.result_host["delete_password"] = False
+        self.result_host["keep_password"] = None
+        if self._host.get("password_enc") is not None and not self.result_host["password_plain"]:
+            if db.target_changed(self._host, self.result_host):
+                box = QMessageBox(self)
+                box.setWindowTitle("Verbindungsziel geändert")
+                box.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+                box.setText(
+                    f"Bisher: {self._host.get('user')}@{self._host.get('primary_ip')}:{self._host.get('port')}\n"
+                    f"Neu: {user}@{ip}:{self.in_port.value()}\n\n"
+                    "Das gespeicherte Passwort darf nicht automatisch übernommen werden.\n"
+                    "Bitte erneut eingeben oder beim Speichern löschen.")
+                reenter = box.addButton("Passwort erneut eingeben", QMessageBox.ButtonRole.RejectRole)
+                delete = box.addButton("Passwort löschen und speichern", QMessageBox.ButtonRole.DestructiveRole)
+                box.addButton(QMessageBox.StandardButton.Cancel)
+                box.setDefaultButton(reenter)
+                box.exec()
+                if box.clickedButton() != delete:
+                    self.in_pwd.setFocus()
+                    return
+                self.result_host["delete_password"] = True
+            elif self._host.get("auth_method") == "password" and self.result_host["auth_method"] == "key":
+                box = QMessageBox(self)
+                box.setWindowTitle("Wechsel zu SSH-Key")
+                box.setText("Soll das bisher gespeicherte SSH-Passwort gelöscht werden?")
+                delete = box.addButton("Löschen (empfohlen)", QMessageBox.ButtonRole.DestructiveRole)
+                keep = box.addButton("Verschlüsselt behalten", QMessageBox.ButtonRole.AcceptRole)
+                cancel = box.addButton(QMessageBox.StandardButton.Cancel)
+                box.setDefaultButton(cancel)
+                box.exec()
+                if box.clickedButton() == delete:
+                    self.result_host["delete_password"] = True
+                elif box.clickedButton() == keep:
+                    self.result_host["keep_password"] = True
+                else:
+                    return
         self.accept()
 
 
@@ -160,9 +197,11 @@ class ConfigDialog(QDialog):
         self.b_add = QPushButton("Hinzufügen")
         self.b_edit = QPushButton("Bearbeiten")
         self.b_del = QPushButton("Löschen")
+        self.b_identity = QPushButton("Serveridentität prüfen")
         btns.addWidget(self.b_add)
         btns.addWidget(self.b_edit)
         btns.addWidget(self.b_del)
+        btns.addWidget(self.b_identity)
         btns.addStretch(1)
         self.b_close = QPushButton("Schließen")
         btns.addWidget(self.b_close)
@@ -171,6 +210,7 @@ class ConfigDialog(QDialog):
         self.b_add.clicked.connect(self._add)
         self.b_edit.clicked.connect(self._edit)
         self.b_del.clicked.connect(self._delete)
+        self.b_identity.clicked.connect(self._check_identity)
         self.b_close.clicked.connect(self.accept)
 
         self._reload()
@@ -199,11 +239,18 @@ class ConfigDialog(QDialog):
         vh = self.table.verticalHeaderItem(row)
         return int(vh.text()) if vh else None
 
+    def _save_host(self, operation, *args, **kwargs):
+        try:
+            return operation(*args, **kwargs)
+        except (ValueError, OSError, db.HostNotFoundError, db.sqlite3.Error) as exc:
+            QMessageBox.warning(self, "Host nicht gespeichert", str(exc))
+            return None
+
     def _add(self):
         dlg = HostEditDialog(self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             h = dlg.result_host
-            hid = db.add_or_update_host(
+            hid = self._save_host(db.add_or_update_host,
                 proxmox_uid=None,
                 name=h["name"],
                 primary_ip=h["primary_ip"],
@@ -213,6 +260,8 @@ class ConfigDialog(QDialog):
                 auth_method=h["auth_method"],
                 key_path=h["key_path"],
                 password_plain=h["password_plain"],
+                delete_password=h["delete_password"],
+                keep_password=h["keep_password"],
                 distro=None,
                 tags=None,
             )
@@ -228,7 +277,7 @@ class ConfigDialog(QDialog):
         dlg = HostEditDialog(self, host)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             h = dlg.result_host
-            db.update_host(
+            self._save_host(db.update_host,
                 host["id"],
                 name=h["name"],
                 primary_ip=h["primary_ip"],
@@ -237,8 +286,20 @@ class ConfigDialog(QDialog):
                 auth_method=h["auth_method"],
                 key_path=h["key_path"],
                 password_plain=h["password_plain"],
+                delete_password=h["delete_password"],
+                keep_password=h["keep_password"],
             )
             self._reload()
+
+    def _check_identity(self):
+        hid = self._current_host_id()
+        if hid is None:
+            QMessageBox.information(self, "Hinweis", "Bitte einen Host auswählen.")
+            return
+        from .ui_host_keys import HostKeyDialog
+        host = db.get_host(hid)
+        if host:
+            HostKeyDialog(host, self).exec()
 
     def _delete(self):
         hid = self._current_host_id()
@@ -269,7 +330,7 @@ class ConfigDialog(QDialog):
         QtCore.QSettings("Faber38", "SSH Updater").setValue("ui/theme", theme)
 
         try:
-            (settings.DATA_DIR / "theme.txt").write_text(theme, encoding="utf-8")
+            storage.write_private(settings.DATA_DIR / "theme.txt", theme.encode("utf-8"))
         except Exception:
             pass
 

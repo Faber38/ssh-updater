@@ -171,10 +171,9 @@ Security: kernel update available
             "auth_method": "key",
         }
         with (
-            mock.patch.object(self.ssh_client, "_auth_params", return_value={}),
             mock.patch.object(
-                self.ssh_client.asyncssh,
-                "connect",
+                self.ssh_client,
+                "connect_host",
                 return_value=ConnectionContext(),
             ),
             mock.patch.object(
