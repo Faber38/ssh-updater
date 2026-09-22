@@ -52,11 +52,11 @@ class RemoteProcessTests(unittest.IsolatedAsyncioTestCase):
                     proc.wait_closed.side_effect = hang
                 start = asyncio.get_running_loop().time()
                 with self.assertRaises(rp.RemoteTimeoutError):
-                    async for _ in rp.output(conn, 'test', timeout=2, limit=100,
-                                             idle_timeout=.02):
+                    async for _ in rp.output(conn, 'test', timeout=5, limit=100,
+                                             idle_timeout=.1):
                         pass
                 self.assertTrue(entered.is_set())
-                self.assertLess(asyncio.get_running_loop().time() - start, .5)
+                self.assertLess(asyncio.get_running_loop().time() - start, 2)
                 proc.kill.assert_not_called()
                 proc.terminate.assert_not_called()
 
@@ -70,8 +70,8 @@ class RemoteProcessTests(unittest.IsolatedAsyncioTestCase):
             else:
                 proc.wait_closed.side_effect = hang
             with self.assertRaisesRegex(rp.RemoteTimeoutError, 'Zeitüberschreitung'):
-                async for _ in rp.output(conn, 'test', timeout=.02, limit=100,
-                                         idle_timeout=2):
+                async for _ in rp.output(conn, 'test', timeout=.2, limit=100,
+                                         idle_timeout=5):
                     pass
 
     async def test_combined_output_limit(self):
@@ -86,20 +86,21 @@ class RemoteProcessTests(unittest.IsolatedAsyncioTestCase):
     async def test_hanging_process_total_timeout(self):
         conn, proc = connection(hang=True)
         with self.assertRaisesRegex(rp.RemoteWaitError, 'Zeitüberschreitung'):
-            await rp.capture(conn, 'synthetic', .02)
+            async for _ in rp.output(conn, 'synthetic', timeout=.2, limit=100, idle_timeout=5):
+                pass
         proc.close.assert_called_once()
         proc.kill.assert_not_called()
 
     async def test_idle_timeout(self):
         conn, _ = connection(hang=True)
         with self.assertRaisesRegex(rp.RemoteWaitError, 'Keine Remote-Ausgabe'):
-            async for _ in rp.output(conn, 'synthetic', timeout=1, limit=100, idle_timeout=.01):
+            async for _ in rp.output(conn, 'synthetic', timeout=5, limit=100, idle_timeout=.1):
                 pass
 
     async def test_stream_timeout_argument_and_unknown_admin_result(self):
         conn, _ = connection(hang=True)
-        with self.assertRaises(rp.RemoteWaitError):
-            _ = [x async for x in ssh_client._stream(conn, 'synthetic', timeout=.02)]
+        with self.assertRaisesRegex(rp.RemoteTimeoutError, 'Zeitüberschreitung'):
+            _ = [x async for x in ssh_client._stream(conn, 'synthetic', timeout=.2)]
         @asynccontextmanager
         async def connected(_):
             yield conn
@@ -136,3 +137,22 @@ class RemoteProcessTests(unittest.IsolatedAsyncioTestCase):
         conn, _ = connection(exit_status=None)
         with self.assertRaisesRegex(rp.RemoteWaitError, 'Exitcode'):
             await rp.capture(conn, 'synthetic', 1)
+
+    async def test_cancellation_at_process_handoff_is_not_swallowed(self):
+        conn, proc = connection(hang=True)
+        async def consume():
+            parent = asyncio.current_task()
+            async def create(*args, **kwargs):
+                # Deterministic reproduction of cancellation concurrent with
+                # create_process completion, without timing or scheduler luck.
+                parent.cancel()
+                return proc
+            conn.create_process.side_effect = create
+            async for _ in rp.output(conn, 'test', timeout=5, limit=100, idle_timeout=.1):
+                pass
+        task = asyncio.create_task(consume())
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        proc.close.assert_called_once()
+        proc.terminate.assert_not_called()
+        proc.kill.assert_not_called()

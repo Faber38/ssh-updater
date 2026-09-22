@@ -51,9 +51,11 @@ async def output(conn, command, *, timeout, limit, idle_timeout=IDLE_TIMEOUT):
     try:
         async with asyncio.timeout(timeout):
             try:
-                proc = await asyncio.wait_for(
-                    conn.create_process(command, encoding=None, window=65536,
-                                        request_pty=False), idle_timeout)
+                # Keep deadlines in this task. Python 3.11 wait_for() can
+                # swallow outer cancellation when its child just completed.
+                async with asyncio.timeout(idle_timeout):
+                    proc = await conn.create_process(
+                        command, encoding=None, window=65536, request_pty=False)
             except TimeoutError as exc:
                 raise RemoteTimeoutError('Zeitlimit bei der Remote-Prozessanforderung.') from exc
             readers = [asyncio.create_task(read(proc.stdout, 'stdout')),
@@ -61,7 +63,8 @@ async def output(conn, command, *, timeout, limit, idle_timeout=IDLE_TIMEOUT):
             done = total = 0
             while done < 2:
                 try:
-                    item = await asyncio.wait_for(queue.get(), idle_timeout)
+                    async with asyncio.timeout(idle_timeout):
+                        item = await queue.get()
                 except TimeoutError as exc:
                     raise RemoteTimeoutError('Keine Remote-Ausgabe innerhalb des Zeitlimits.') from exc
                 if isinstance(item, Exception):
@@ -75,7 +78,8 @@ async def output(conn, command, *, timeout, limit, idle_timeout=IDLE_TIMEOUT):
                     raise RemoteWaitError('Remote-Ausgabelimit überschritten.')
                 yield name, text
             try:
-                await asyncio.wait_for(proc.wait_closed(), idle_timeout)
+                async with asyncio.timeout(idle_timeout):
+                    await proc.wait_closed()
             except TimeoutError as exc:
                 raise RemoteTimeoutError('Zeitlimit beim Warten auf den Remote-Kanalschluss.') from exc
             if proc.exit_status is None or proc.exit_status < 0:

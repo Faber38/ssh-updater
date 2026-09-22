@@ -85,14 +85,14 @@ class WorkflowModeTests(unittest.TestCase):
                 proc = subprocess.run([sys.executable, '-B', str(ROOT / 'scripts/release.py'), 'workflow'],
                                       env=env, capture_output=True, text=True, timeout=10)
                 self.assertEqual(proc.returncode, 0, proc.stderr)
-                values = dict(line.split('=', 1) for line in output.read_text().splitlines())
+                values = dict(line.split('=', 1) for line in output.read_text(encoding="utf-8").splitlines())
                 self.assertEqual(values['release_tag'], tag)
                 self.assertEqual(set(values), {'artifact_label', 'release_tag'})
 
     def test_workflow_trigger_release_gate_permissions_and_shared_checks(self):
         # Structural contract; YAML syntax is also checked separately before commit.
         import re
-        workflow = (ROOT / '.github/workflows/build-release.yml').read_text()
+        workflow = (ROOT / '.github/workflows/build-release.yml').read_text(encoding="utf-8")
         self.assertIn('on:\n  workflow_dispatch:\n  push:\n    tags:\n      - "v*"', workflow)
         self.assertEqual(workflow.count('contents: write'), 1)
         self.assertIn('permissions:\n  contents: read\n', workflow)
@@ -119,3 +119,14 @@ class WorkflowModeTests(unittest.TestCase):
                 self.assertIn(command, job)
             self.assertIn('ARTIFACT_LABEL: ${{ steps.validate.outputs.artifact_label }}', job)
             self.assertNotIn('github.ref_name', job)
+
+    def test_project_text_reads_explicitly_use_utf8(self):
+        original = Path.read_text
+        def require_utf8(path, *args, **kwargs):
+            if path.is_relative_to(ROOT):
+                self.assertEqual(kwargs.get('encoding'), 'utf-8', str(path))
+            return original(path, *args, **kwargs)
+        with mock.patch.object(Path, 'read_text', require_utf8), mock.patch('builtins.print'):
+            self.assertRegex(release.version(), r'^\d+\.\d+\.\d+$')
+            release.check_environment()
+            self.test_workflow_trigger_release_gate_permissions_and_shared_checks()

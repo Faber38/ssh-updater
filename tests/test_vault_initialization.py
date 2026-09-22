@@ -1,4 +1,5 @@
 """Non-destructive handling of missing, interrupted and legacy vault state."""
+from contextlib import closing
 import sqlite3
 import sys
 import tempfile
@@ -98,13 +99,17 @@ class VaultInitializationTests(unittest.TestCase):
 
     def test_mismatched_credentials_do_not_unlock_or_modify_data(self):
         self.create_credentials()
-        with sqlite3.connect(self.root / 'app.db') as con:
+        with closing(sqlite3.connect(self.root / 'app.db')) as con, con:
             con.execute('UPDATE hosts SET password_enc=?', (b'foreign or corrupt token',))
         before = (self.root / 'app.db').read_bytes()
         with self.assertRaisesRegex(OSError, 'inkonsistent'):
             crypto.set_master_password('original')
         self.assertFalse(crypto.is_unlocked())
         self.assertEqual((self.root / 'app.db').read_bytes(), before)
+        with self.assertRaises(sqlite3.ProgrammingError):
+            con.execute('SELECT 1')
+        moved = (self.root / 'app.db').rename(self.root / 'renamed.db')
+        moved.unlink()
 
     def test_damaged_verifier_does_not_unlock_or_replace_files(self):
         self.create_credentials()

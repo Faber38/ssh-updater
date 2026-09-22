@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def version():
-    tree = ast.parse((ROOT / 'src/sshupdater/__init__.py').read_text())
+    tree = ast.parse((ROOT / 'src/sshupdater/__init__.py').read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and
                 t.id == '__version__' for t in node.targets):
@@ -57,12 +57,12 @@ def check_workflow():
 
 def check_environment():
     from packaging.requirements import Requirement
-    expected = (ROOT / 'release-python.txt').read_text().strip()
+    expected = (ROOT / 'release-python.txt').read_text(encoding="utf-8").strip()
     actual = '.'.join(map(str, sys.version_info[:2]))
     if actual != expected:
         raise ValueError(f'Expected Python {expected}.x, got {sys.version.split()[0]}')
     for filename in ('requirements.txt', 'requirements-build.txt'):
-        for line in (ROOT / filename).read_text().splitlines():
+        for line in (ROOT / filename).read_text(encoding="utf-8").splitlines():
             if not line or line.startswith(('#', '-r')):
                 continue
             req = Requirement(line)
