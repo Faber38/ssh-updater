@@ -12,6 +12,7 @@ import asyncssh
 from sshupdater.ui_config import HostEditDialog
 from sshupdater.ui_host_keys import HostKeyDialog
 from sshupdater.core import host_keys
+from sshupdater.ui_text import PlainMessageBox
 
 
 class SecurityDialogTests(unittest.TestCase):
@@ -30,7 +31,7 @@ class SecurityDialogTests(unittest.TestCase):
                     button.click()
                     return 0
             raise AssertionError(text)
-        return mock.patch.object(QtWidgets.QMessageBox, 'exec', execute)
+        return mock.patch.object(PlainMessageBox, 'exec', execute)
 
     def test_target_change_cancel_reentry_and_delete(self):
         for choice, accepted in [('Cancel', False), ('Passwort erneut eingeben', False),
@@ -64,7 +65,7 @@ class SecurityDialogTests(unittest.TestCase):
         dialog = HostEditDialog(None, self.host())
         dialog.in_port.setValue(2222)
         dialog.in_pwd.setText('reentered')
-        with mock.patch.object(QtWidgets.QMessageBox, 'exec') as prompt:
+        with mock.patch.object(PlainMessageBox, 'exec') as prompt:
             dialog._save()
         prompt.assert_not_called()
         self.assertEqual(dialog.result(), QtWidgets.QDialog.DialogCode.Accepted)
@@ -84,12 +85,12 @@ class SecurityDialogTests(unittest.TestCase):
             confirm.assert_not_called()
             dialog.checked.setChecked(True)
             self.assertTrue(dialog.trust.isEnabled())
-            with mock.patch.object(QtWidgets.QMessageBox, 'warning',
-                                   return_value=QtWidgets.QMessageBox.StandardButton.Cancel):
+            with mock.patch.object(PlainMessageBox, 'warning',
+                                   return_value=PlainMessageBox.StandardButton.Cancel):
                 dialog._trust()
             confirm.assert_not_called()
-            with mock.patch.object(QtWidgets.QMessageBox, 'warning',
-                                   return_value=QtWidgets.QMessageBox.StandardButton.Yes):
+            with mock.patch.object(PlainMessageBox, 'warning',
+                                   return_value=PlainMessageBox.StandardButton.Yes):
                 dialog._trust()
             confirm.assert_called_once_with(observation)
         dialog.deleteLater()

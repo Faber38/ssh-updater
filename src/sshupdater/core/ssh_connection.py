@@ -1,10 +1,15 @@
 """One policy for all application SSH connections, including ProxyJump hops."""
 from contextlib import asynccontextmanager, AsyncExitStack
 from urllib.parse import urlsplit
+import asyncio
 import asyncssh
 from asyncssh.connection import _select_host_key_algs
 from asyncssh.public_key import get_default_public_key_algs
 from . import db, host_keys
+
+
+CONNECT_TIMEOUT = 20
+CLOSE_TIMEOUT = 2
 
 
 def auth_params(host):
@@ -35,7 +40,9 @@ def options_for(host, *, inspect=False, jump=False, config=()):
     params = auth_params(host) if not inspect else dict(
         client_keys=None, client_certs=[], agent_path=None, pkcs11_provider=None,
         password=None, public_key_auth=False, password_auth=False, kbdint_auth=False)
-    params.update(agent_forwarding=False, host_based_auth=False, gss_auth=False,
+    params.update(agent_forwarding=False, x11_forwarding=False, request_pty=False,
+                  connect_timeout=CONNECT_TIMEOUT, login_timeout=CONNECT_TIMEOUT,
+                  host_based_auth=False, gss_auth=False,
                   gss_kex=False, gss_delegate_creds=False,
                   # Empty trust set invokes our mandatory exact-pin validator.
                   known_hosts=asyncssh.import_known_hosts(''),
@@ -82,15 +89,27 @@ async def _open(options, requested, *, inspect=False, chain=(), tunnel=None):
         validator = host_keys.Validator(options.host_key_alias or options.host,
                                         options.port, requested, inspect=inspect,
                                         address=options.host)
+        conn = None
         try:
-            async with asyncssh.connect(options.host, port=options.port,
-                                        username=options.username, options=options, tunnel=tunnel,
-                                        client_factory=lambda: validator) as conn:
-                yield conn
+            conn = await asyncssh.connect(options.host, port=options.port,
+                                          username=options.username, options=options, tunnel=tunnel,
+                                          client_factory=lambda: validator)
+            yield conn
         except asyncssh.HostKeyNotVerifiable as exc:
             if validator.observation is not None:
                 raise host_keys.ReviewRequired(validator.observation) from exc
             raise OSError("Serveridentität konnte nicht geprüft werden; Verbindung blockiert.") from exc
+        finally:
+            if conn is not None:
+                conn.close()
+                try:
+                    await asyncio.wait_for(conn.wait_closed(), CLOSE_TIMEOUT)
+                except TimeoutError:
+                    conn.abort()
+                except asyncio.CancelledError:
+                    conn.abort()
+                    raise
+
 
 
 @asynccontextmanager
@@ -99,7 +118,9 @@ async def connect_host(host):
         options = options_for(host)
     except ValueError as exc:
         raise OSError(f"SSH-Konfiguration ungültig: {exc}") from exc
-    async with _open(options, host['primary_ip']) as conn:
+    async with AsyncExitStack() as stack:
+        async with asyncio.timeout(CONNECT_TIMEOUT):
+            conn = await stack.enter_async_context(_open(options, host['primary_ip']))
         yield conn
 
 
@@ -107,7 +128,8 @@ async def inspect_host(host):
     """Return the first untrusted hop, or the target key, without target login."""
     options = options_for(host, inspect=True)
     try:
-        async with _open(options, host['primary_ip'], inspect=True):
-            raise OSError("Server hat keinen prüfbaren öffentlichen Host-Key angeboten.")
+        async with asyncio.timeout(CONNECT_TIMEOUT):
+            async with _open(options, host['primary_ip'], inspect=True):
+                raise OSError("Server hat keinen prüfbaren öffentlichen Host-Key angeboten.")
     except host_keys.ReviewRequired as exc:
         return exc.observation

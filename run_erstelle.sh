@@ -1,28 +1,27 @@
 #!/usr/bin/env bash
-set -e
+set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "──────────────────────────────────────────────"
 echo " SSH-Updater – Buildskript (PyInstaller)"
 echo "──────────────────────────────────────────────"
 
-# Virtuelle Umgebung aktivieren
-if [ ! -d ".venv" ]; then
-    echo "Erstelle virtuelle Umgebung ..."
-    python3 -m venv .venv
+# Isolierte Release-Umgebung; die Entwicklungs-.venv bleibt unverändert.
+RELEASE_VENV="${SSH_UPDATER_RELEASE_VENV:-.venv-release}"
+if [ ! -d "$RELEASE_VENV" ]; then
+    "${SSH_UPDATER_PYTHON:-python3.11}" -m venv "$RELEASE_VENV"
 fi
-source .venv/bin/activate
-
-# Dieselbe Python-Major/Minor-Version wie im Release-Workflow verwenden.
-python --version
-python -c 'import pathlib, sys; expected = pathlib.Path("release-python.txt").read_text().strip(); actual = ".".join(map(str, sys.version_info[:2])); sys.exit(0 if actual == expected else "Bitte .venv mit Python " + expected + ".x neu erstellen.")'
+source "$RELEASE_VENV/bin/activate"
+python -c 'import pathlib, sys; expected = pathlib.Path("release-python.txt").read_text().strip(); actual = ".".join(map(str, sys.version_info[:2])); sys.exit(0 if actual == expected else "Bitte Release-Umgebung mit Python " + expected + ".x neu erstellen.")'
 python -m pip install -r requirements-build.txt
 python -m pip check
-QT_QPA_PLATFORM=offscreen python -m unittest discover -s tests -v
+python scripts/release.py environment
+python -B scripts/test_release.py
 
 # Build starten
 echo "Erstelle One-File-Binary ..."
-python -m PyInstaller ssh-updater.spec --noconfirm
+python -m PyInstaller ssh-updater.spec --noconfirm --clean
+QT_QPA_PLATFORM=offscreen ./dist/ssh-updater --smoke-test
 
 # Fertiges Binary anzeigen
 echo

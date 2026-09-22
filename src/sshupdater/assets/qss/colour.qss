@@ -84,7 +84,7 @@ QLineEdit:focus, QComboBox:focus, QSpinBox:focus {
 }
 
 /* Log-Feld */
-QTextEdit {
+QPlainTextEdit {
     background-color: #fdfdfd;
     border: 1px solid #c4e3ff;
     border-radius: 6px;

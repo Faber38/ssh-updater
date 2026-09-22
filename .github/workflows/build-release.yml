@@ -6,7 +6,10 @@ on:
       - "v*"
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
 
 jobs:
   # ---------- Linux-Build ----------
@@ -16,14 +19,16 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version-file: release-python.txt
 
-      - name: Show Python version
-        run: python --version
+      - name: Validate tag and application version
+        run: python scripts/release.py tag
 
       - name: Install Linux system dependency
         run: |
@@ -34,23 +39,29 @@ jobs:
         run: |
           python -m pip install -r requirements-build.txt
           python -m pip check
+          python scripts/release.py environment
 
       - name: Test release environment
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m unittest discover -s tests -v
+        run: python -B scripts/test_release.py
 
       - name: Build with PyInstaller (Linux)
         run: |
-          cd $GITHUB_WORKSPACE
+          cd "$GITHUB_WORKSPACE"
           echo "📦 Building SSH Updater (Linux)..."
-          pyinstaller ssh-updater.spec --noconfirm
+          python -m PyInstaller ssh-updater.spec --noconfirm --clean
           ls -R .
+
+      - name: Smoke test Linux executable
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: ./dist/ssh-updater --smoke-test
 
       - name: Create Linux archive
         run: |
           cd dist
-          tar czf ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz ssh-updater
+          tar czf "ssh-updater-${RELEASE_TAG}-linux-x86_64.tar.gz" ssh-updater
           ls -l
 
       - name: Upload Linux artifact
@@ -66,32 +77,47 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version-file: release-python.txt
 
-      - name: Show Python version
-        run: python --version
+      - name: Validate tag and application version
+        run: python scripts/release.py tag
 
       - name: Install dependencies
         run: |
           python -m pip install -r requirements-build.txt
           python -m pip check
+          python scripts/release.py environment
+
+      - name: Test release environment
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -B scripts/test_release.py
 
       - name: Build Windows EXE
         run: |
           echo "📦 Building SSH Updater (Windows)..."
-          pyinstaller ssh-updater.spec --noconfirm
+          python -m PyInstaller ssh-updater.spec --noconfirm --clean
           dir
+
+      - name: Smoke test Windows executable
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          & ./dist/ssh-updater.exe --smoke-test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Create Windows ZIP
         run: |
           cd dist
           echo "📦 Creating Windows ZIP..."
           dir
-          powershell -Command "Compress-Archive -Path 'ssh-updater.exe' -DestinationPath 'ssh-updater-${{ github.ref_name }}-windows-x86_64.zip'"
+          Compress-Archive -LiteralPath "ssh-updater.exe" -DestinationPath "ssh-updater-${env:RELEASE_TAG}-windows-x86_64.zip"
           dir
 
       - name: Upload Windows artifact
@@ -102,6 +128,8 @@ jobs:
 
   # ---------- Release erstellen & Assets anhängen ----------
   release:
+    permissions:
+      contents: write
     needs: [build-linux, build-windows]
     runs-on: ubuntu-latest
 

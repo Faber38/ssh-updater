@@ -37,7 +37,7 @@ class UpgradeFailureDiagnosticsTests(unittest.IsolatedAsyncioTestCase):
         async def upgrade(_conn, _use_sudo):
             for line in lines:
                 yield line
-            yield f"[RC={rc}]"
+            yield self.ssh_client.CommandExit(rc)
 
         host = {
             "id": 42,

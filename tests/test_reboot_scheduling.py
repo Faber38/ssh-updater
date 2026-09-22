@@ -73,9 +73,9 @@ class RebootSchedulingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("sudo", result["note"])
 
-    async def test_timeout_is_error(self):
+    async def test_scheduling_timeout_has_unknown_remote_state(self):
         result, _ = await self._run_reboot([(0, "/usr/bin/systemd-run\n", ""), (124, "", "Timeout")])
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["status"], "unknown")
         self.assertIn("Zeitüberschreitung", result["note"])
 
     async def test_asyncssh_error_is_never_success(self):
@@ -97,7 +97,8 @@ class RebootSchedulingTests(unittest.IsolatedAsyncioTestCase):
                 self.ssh_client.asyncssh.ConnectionLost("Verbindung abgebrochen"),
             ]
         )
-        self.assertEqual(result["status"], "error")
+        self.assertEqual(result["status"], "unknown")
+        self.assertIn("Remote-Zustand unbekannt", result["note"])
         self.assertIn("nicht bestätigt", result["note"])
 
     async def test_root_command_does_not_use_sudo(self):

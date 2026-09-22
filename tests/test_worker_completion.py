@@ -140,7 +140,7 @@ class WorkerCompletionTests(unittest.TestCase):
         for action in self._actions(window):
             action.setEnabled(False)
 
-        with mock.patch.object(self.QtWidgets.QMessageBox, "question") as question:
+        with mock.patch.object(self.ui_main.PlainMessageBox, "question") as question:
             window._on_clean_sim_done()
 
         question.assert_not_called()

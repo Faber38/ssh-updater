@@ -43,7 +43,7 @@ Ideal for administrators who regularly need to check, simulate, and update multi
 
 ```bash
 # Create and activate a virtual environment
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 
 # Install dependencies
@@ -108,7 +108,7 @@ still take precedence, as before. Both the HostKeyAlias trust name and the conne
 address are displayed. SSH configuration and proxy executables are trusted local
 configuration; editing them can redirect connections.
 
-The application overrides host trust, disables agent forwarding, hostbased and GSS
+The application overrides host trust, disables agent and X11 forwarding, including ProxyJump, hostbased and GSS
 authentication, and enforces the selected authentication method. Password mode uses
 only the saved password, including simple keyboard-interactive password prompts.
 An explicit key file selects only that identity, including a matching certificate
@@ -137,14 +137,14 @@ storage needs a deliberate move to a regular data directory; the application doe
 not move data. This does not implement Windows ACL hardening.
 
 Cryptographic credential binding, a memory-hard KDF with versioned migration,
-general credential deletion, output/log hardening and automatic vault locking are
+general credential deletion, further log hardening and automatic vault locking are
 reserved for a later release.
 
-The release uses Python **3.11.16** (`release-python.txt`), AsyncSSH **2.24.0**,
-Cryptography **50.0.1**, and PyInstaller **6.22.3**. Runtime and transitive dependencies
+The release uses Python **3.11.x** (`release-python.txt`; tested with 3.11.16), AsyncSSH **2.24.0 with a pinned upstream transport fix**,
+Cryptography **50.0.1**, PyQt6 **6.11.0** with Qt **6.11.2**, and PyInstaller **6.22.3**. Runtime and transitive dependencies
 are pinned in `requirements.txt`; build dependencies are pinned in `requirements-build.txt`.
 Create a clean environment with that Python version and install `requirements-build.txt`.
-The local build script checks Python and runs tests before building; Linux release CI
+The local build script checks Python and runs tests before building; Linux and Windows release CI
 uses the same versions and tests. Package pins do not imply bit-identical OS images.
 The AsyncSSH update includes key-exchange hardening and proxy/configuration fixes,
 not merely warning suppression ([changelog](https://asyncssh.readthedocs.io/en/latest/changes.html)).
@@ -159,6 +159,58 @@ Missing vault files with existing encrypted data, damaged salts and credentials 
 do not match the unlocked key cause a non-destructive error. Interrupted initialization
 leaving only one vault file is also rejected, without automatic repair or deletion.
 
-Run tests with `QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests -v`.
+Run tests with `.venv-release/bin/python -B scripts/test_release.py`.
 Security tests use temporary data and local SSH servers on `127.0.0.1`, requiring
 permission to open local sockets. They do not administer real managed systems.
+
+### Output limits and stopping local waits
+
+All remote output is plain text; HTML, entities and SVG data URLs are not rendered.
+The log retains up to 2,000 blocks and 16,384 characters per entry. Older blocks
+are discarded and oversized entries truncated. Combined stdout/stderr is limited
+to 4 MiB for queries and 16 MiB for streaming commands. Connections including
+ProxyJump have a 20-second deadline. Queries have a 90-second timeout (reboot:
+10 seconds); streaming commands have a one-hour deadline and a five-minute idle
+timeout. Streaming lines are batched before display.
+
+**Stop ends local waiting and skips the remaining selected hosts.** Timeout,
+output limit or connection loss after an administrative action starts means
+“Remote state unknown”. No kill/terminate signal is sent; the SSH connection is
+closed. The remote process may continue or react to disconnection. Check the host
+before retrying. Failed simulations report errors. Autoremove requires confirmation
+and excludes hosts without successful simulations. DNF uses `check-update` with
+exit codes 0/100 to preview available updates, not a full transaction plan.
+Arch `checkupdates` exit code 2 means no updates.
+
+### Local release builds
+
+`run_erstelle.sh` creates/uses a separate Python 3.11 `.venv-release`, installs the
+runtime/build pins, checks the environment, dependencies and tests, builds the
+binary and runs its offline `--smoke-test`. Override `SSH_UPDATER_PYTHON` and
+`SSH_UPDATER_RELEASE_VENV` to select another interpreter/isolated environment.
+The test runner isolates home lookups and Qt settings. The offline smoke test
+uses no vault files, SSH agents or managed hosts.
+
+`dist/` contains ignored local build output, not proof of a current release.
+Use only the result of a fully successful current build; an existing binary may
+be stale. Release workflows require a strict `vMAJOR.MINOR.PATCH` tag matching
+`__version__` and use it in archive names. Only the final release job has write
+permissions.
+
+### Final security review changes
+
+AsyncSSH uses the unmodified, unreleased upstream revision
+`459f44515238880b7be68299bb7d1fc0e704121d`, pinned by archive SHA256. It still
+reports 2.24.0 internally and must not be replaced with PyPI 2.24.0. The release
+check verifies installed archive provenance: [transport limit](docs/transport-limit.md).
+
+Application processes explicitly disable PTYs even with `RequestTTY force`.
+Idle deadlines cover process requests, output and channel closure. All six action
+workers support local cancellation; no later hosts start after cancellation, and
+stopped autoremove simulations never launch cleanup. Closing the window requests
+local cancellation and waits for local workers. No remote package-manager kill
+signals are sent; unknown remote outcomes remain marked as unknown.
+
+APT index updates use `--error-on=any` to stop subsequent steps on transient errors
+too. Older APT versions lacking this option fail explicitly without an unsafe
+fallback. Other index warnings remain visible in checks and simulations.

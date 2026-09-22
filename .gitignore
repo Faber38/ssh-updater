@@ -22,6 +22,7 @@ pip-wheel-metadata/
 
 # --- Virtual Envs ---
 .venv/
+.venv-release/
 venv/
 
 # --- Qt / PyQt / QtCreator ---

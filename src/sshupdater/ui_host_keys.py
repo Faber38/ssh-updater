@@ -2,6 +2,7 @@
 import asyncio
 from PyQt6 import QtCore, QtWidgets
 from .core import host_keys, ssh_connection
+from .ui_text import PlainMessageBox
 
 
 class _ProbeWorker(QtCore.QThread):
@@ -97,18 +98,18 @@ class HostKeyDialog(QtWidgets.QDialog):
         if not self.observation or not self.checked.isChecked():
             return
         if self.observation.changed:
-            answer = QtWidgets.QMessageBox.warning(
+            answer = PlainMessageBox.warning(
                 self, "Geänderten Server-Key ersetzen?",
                 "Ein geänderter Schlüssel kann auf eine Neuinstallation oder einen Angriff hinweisen.\n"
                 "Den unabhängig geprüften neuen Schlüssel wirklich übernehmen?",
-                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
-                QtWidgets.QMessageBox.StandardButton.Cancel)
-            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                PlainMessageBox.StandardButton.Yes | PlainMessageBox.StandardButton.Cancel,
+                PlainMessageBox.StandardButton.Cancel)
+            if answer != PlainMessageBox.StandardButton.Yes:
                 return
         try:
             host_keys.confirm(self.observation)
         except (OSError, ValueError) as exc:
-            QtWidgets.QMessageBox.critical(self, "Server-Key nicht gespeichert", str(exc))
+            PlainMessageBox.critical(self, "Server-Key nicht gespeichert", str(exc))
             return
         self.observation = None
         self.trust.setEnabled(False)

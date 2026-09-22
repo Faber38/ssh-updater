@@ -1,9 +1,10 @@
 import sys
 from pathlib import Path
 from PyQt6 import QtWidgets
-from PyQt6.QtWidgets import QInputDialog, QMessageBox, QLineEdit
+from PyQt6.QtWidgets import QInputDialog, QLineEdit
 
 from sshupdater.ui_main import MainWindow
+from sshupdater.ui_text import PlainMessageBox as QMessageBox
 from sshupdater.core import db, crypto, settings
 
 
@@ -14,6 +15,9 @@ def resource_path(*parts):
 
 
 def main():
+    if '--smoke-test' in sys.argv:
+        from sshupdater.smoke import run
+        return run(resource_path)
     app = QtWidgets.QApplication(sys.argv)
     try:
         settings.initialize()

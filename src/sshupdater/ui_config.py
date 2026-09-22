@@ -8,7 +8,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
-    QMessageBox,
     QFormLayout,
     QLineEdit,
     QComboBox,
@@ -18,6 +17,7 @@ from PyQt6.QtWidgets import (
     QLabel,
 )
 from .core import db, settings, storage
+from .ui_text import PlainMessageBox as QMessageBox
 
 
 class HostEditDialog(QDialog):
@@ -66,7 +66,7 @@ class HostEditDialog(QDialog):
         form.addRow("Passwort", self.in_pwd)
         lay.addLayout(form)
 
-        hint = QLabel("SSH-Key: gewählte Datei, sonst SSH-Konfiguration / Standard-Keys / lokaler Agent.\nAgent-Forwarding ist immer deaktiviert.")
+        hint = QLabel("SSH-Key: gewählte Datei, sonst SSH-Konfiguration / Standard-Keys / lokaler Agent.\nAgent- und X11-Forwarding sind immer deaktiviert.")
         hint.setStyleSheet("color:#aaa;")
         lay.addWidget(hint)
 

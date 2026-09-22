@@ -1,8 +1,9 @@
 from __future__ import annotations
-import asyncio, asyncssh, logging, re
+import asyncssh, logging, re
 from collections import deque
 from typing import Dict, Any, Tuple
 from .ssh_connection import connect_host
+from .remote_process import capture, stream, CommandExit, RemoteTimeoutError, STREAM_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -11,10 +12,9 @@ UPGRADE_FAILURE_LINE_LENGTH = 1000
 
 async def _run(conn: asyncssh.SSHClientConnection, cmd: str, timeout: int = 90) -> Tuple[int, str, str]:
     try:
-        res = await asyncio.wait_for(conn.run(cmd, check=False), timeout=timeout)
-        return res.exit_status, res.stdout, res.stderr
-    except asyncio.TimeoutError:
-        return 124, "", f"Timeout after {timeout}s: {cmd}"
+        return await capture(conn, cmd, timeout)
+    except RemoteTimeoutError as exc:
+        return 124, "", str(exc)
 
 async def _detect_distro(conn) -> str:
     code, out, _ = await _run(conn, "bash -lc 'cat /etc/os-release 2>/dev/null'")
@@ -47,13 +47,15 @@ def _raise_check_error(step: str, code: int, stderr: str) -> None:
 
 
 async def _check_debian(conn):
-    code, _, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; sudo -n apt-get -qq update'")
+    code, _, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; sudo -n apt-get -qq update --error-on=any'")
     if code != 0:
         _raise_check_error("apt-get update", code, err)
 
+    index_note = err.strip()
     code, out, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt-get -s dist-upgrade'")
     if code != 0:
         _raise_check_error("apt-get -s dist-upgrade", code, err)
+    err = "\n".join(note for note in (index_note, err.strip()) if note)
 
     n = 0
     for line in out.splitlines():
@@ -89,6 +91,8 @@ async def _check_arch(conn):
         )
 
     code, out, err = await _run(conn, "checkupdates")
+    if code == 2:
+        return 0, err.strip()
     if code != 0:
         _raise_check_error("checkupdates", code, err)
     n = sum(1 for line in out.splitlines() if line.strip())
@@ -122,40 +126,34 @@ async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
 # ---------- Simulation (Dry-Run) ----------
 
 async def _sim_debian(conn):
-    # 1) Index aktualisieren (sprachneutral)
-    await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; sudo -n apt-get -qq update'")
-
-    # 2) Simulation fahren
+    code, _, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; sudo -n apt-get -qq update --error-on=any'")
+    if code != 0:
+        _raise_check_error("apt-get update", code, err)
+    index_note = err.strip()
     code, out, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt-get -s dist-upgrade'")
-
-    # 3) Pakete zählen
-    n = 0
-    for line in out.splitlines():
-        if line.startswith("Inst "):   # apt-get -s schreibt 'Inst <pkg> ...'
-            n += 1
-    if n == 0:
-        code2, out2, _ = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt list --upgradable 2>/dev/null | tail -n +2 | wc -l'")
-        try: n = max(n, int(out2.strip()))
-        except: pass
-
+    if code != 0:
+        _raise_check_error("apt-get -s dist-upgrade", code, err)
+    err = "\n".join(note for note in (index_note, err.strip()) if note)
+    n = sum(1 for line in out.splitlines() if line.startswith("Inst "))
     return n, out, err
 
+
 async def _sim_rpm(conn):
-    # 'assumeno' zeigt, was passieren würde
-    code, out, err = await _run(conn, "sudo -n dnf -q upgrade --refresh --assumeno")
-    # Heuristik: Zeilen mit 'Upgrading ' zählen
-    _, n_out, _ = await _run(conn, r"bash -lc \"sudo -n dnf -q upgrade --refresh --assumeno | grep -c -E 'Upgrading|Downgrading|Installing' || true\"")
-    try:
-        count = int(n_out.strip())
-    except ValueError:
-        count = 0
-    return count, out, err
+    # check-update has unambiguous documented 0/100/1 exit semantics.
+    # This is an available-update preview, not a dependency transaction plan.
+    code, out, err = await _run(conn, "sudo -n dnf -q --refresh check-update")
+    if code not in (0, 100):
+        _raise_check_error("dnf check-update", code, err)
+    package_line = re.compile(r"^\S+\.\S+\s+\S+\s+\S+(?:\s+.*)?$")
+    n = sum(1 for line in out.splitlines() if package_line.match(line.strip())) if code == 100 else 0
+    return n, out, "Verfügbare Updates; kein vollständiger DNF-Transaktionsplan. " + err
+
 
 async def _sim_arch(conn):
-    # Paketliste (ähnlich Dry-Run)
-    code, out, err = await _run(conn, "bash -lc 'command -v checkupdates >/dev/null 2>&1 && checkupdates || true'")
-    count = len([l for l in out.splitlines() if l.strip()])
-    return count, out, err
+    code, out, err = await _run(conn, "checkupdates")
+    if code not in (0, 2):
+        _raise_check_error("checkupdates", code, err)
+    return (0 if code == 2 else len(out.splitlines())), out, err
 
 async def simulate_upgrade_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
     """Gibt geplante Paketupdates zurück (ohne Änderungen)."""
@@ -181,57 +179,27 @@ async def simulate_upgrade_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
                 "host_id": host["id"], "name": name, "status": "ok",
                 "distro": distro, "packages": n, "details": details, "note": note or ""
             }
-    except (asyncssh.Error, OSError) as e:
+    except (asyncssh.Error, OSError, UpdateCheckError) as e:
         return {"host_id": host["id"], "name": name, "status": "error", "note": f"SSH: {e}"}
 
 # ---------- Upgrade (mit Live-Streaming) ----------
 
-async def _stream(conn, cmd: str, timeout: int = 0):
-    """
-    Führt einen Befehl aus und liefert die komplette Prozessausgabe
-    (stdout + stderr) zeilenweise.
-    timeout=0 -> kein globales Timeout (Paket-Upgrades können dauern).
-    Gibt am Ende eine Zeile [RC=<code>] aus.
-    """
-    proc = await conn.create_process(
-        cmd,
-        stderr=asyncssh.STDOUT,
-    )
-    rc = 1
-    try:
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            yield line.rstrip("\n")
-
-        # AsyncSSH wait() liefert ein Prozess-Ergebnisobjekt.
-        # Der echte numerische Rückgabecode steht in proc.exit_status.
-        await proc.wait()
-        rc = proc.exit_status
-        if rc is None:
-            rc = 1
-    except Exception as e:
-        yield f"[client] stream error: {e}"
-        rc = 1
-
-    yield f"[RC={int(rc)}]"
+async def _stream(conn, cmd: str, timeout: int = STREAM_TIMEOUT):
+    async for event in stream(conn, cmd, timeout):
+        yield event
 
 async def _upgrade_debian(conn, use_sudo: bool):
     prefix = "sudo -n " if use_sudo else ""
 
     # Paketlisten aktualisieren und Ausgabe/Fehler ebenfalls weiterreichen.
-    update_rc = 0
+    update_rc = 1
     async for line in _stream(
         conn,
-        f"{prefix}apt-get update -y -o=Dpkg::Use-Pty=0"
+        f"{prefix}apt-get update --error-on=any -y -o=Dpkg::Use-Pty=0"
     ):
         yield line
-        if line.startswith("[RC="):
-            try:
-                update_rc = int(line[4:-1])
-            except Exception:
-                update_rc = 1
+        if isinstance(line, CommandExit):
+            update_rc = line.status
 
     # Wenn schon apt-get update scheitert, kein dist-upgrade mehr starten.
     if update_rc != 0:
@@ -284,6 +252,7 @@ async def upgrade_host_stream(host: Dict[str, Any]):
         yield {"type": "result", "result": {"status": "error", "note": "IP/User fehlt"}}
         return
 
+    dispatched = False
     try:
         async with connect_host(host) as conn:
             distro = await _detect_distro(conn)
@@ -299,16 +268,13 @@ async def upgrade_host_stream(host: Dict[str, Any]):
                 yield {"type": "result", "result": {"status": "error", "note": "Unbekannte Distro"}}
                 return
 
-            rc = 0
+            dispatched = True
+            rc = 1
             recent_output = deque(maxlen=UPGRADE_FAILURE_BUFFER_LINES)
             async for line in gen:
                 # Zeilen streamen
-                if line.startswith("[RC="):
-                    # Exitcode extrahieren
-                    try:
-                        rc = int(line[4:-1])
-                    except Exception:
-                        rc = 0
+                if isinstance(line, CommandExit):
+                    rc = line.status
                 else:
                     recent_output.append(line[:UPGRADE_FAILURE_LINE_LENGTH])
                     yield {"type": "line", "line": line}
@@ -336,14 +302,16 @@ async def upgrade_host_stream(host: Dict[str, Any]):
                 note += f"; letzte Ausgabe: {recent_output[-1][:200]}"
             yield {"type": "result", "result": {"status": "ok" if rc == 0 else "error", "note": note, "distro": distro}}
             return
-    except (asyncssh.Error, OSError) as e:
-        yield {"type": "result", "result": {"status": "error", "note": f"SSH: {e}"}}
+    except (asyncssh.Error, OSError, UpdateCheckError) as e:
+        yield {"type": "result", "result": {"status": "unknown" if dispatched else "error", "note": (f"Remote-Zustand unbekannt: {e}. Vor erneutem Start am Host prüfen." if dispatched else f"SSH: {e}")}}
         return
 # ---------- Autoremove (Simulation + Live-Run) ----------
 
 async def _sim_autoremove_debian(conn):
     # Simulation (sprachunabhängig)
     code, out, err = await _run(conn, "bash -lc 'export LC_ALL=C LANG=C; apt-get -s autoremove --purge'")
+    if code != 0:
+        _raise_check_error("apt-get -s autoremove --purge", code, err)
     # Zählen: Zeilen, die mit 'Remv ' beginnen, oder Summary '... to remove'
     n = sum(1 for ln in out.splitlines() if ln.startswith("Remv "))
     if n == 0:
@@ -365,7 +333,7 @@ async def simulate_autoremove_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
                 return {"host_id": host["id"], "name": name, "status": "error", "note": "Autoremove nur Debian implementiert"}
             n, details, note = await _sim_autoremove_debian(conn)
             return {"host_id": host["id"], "name": name, "status": "ok", "distro": distro, "packages": n, "details": details, "note": note or ""}
-    except (asyncssh.Error, OSError) as e:
+    except (asyncssh.Error, OSError, UpdateCheckError) as e:
         return {"host_id": host["id"], "name": name, "status": "error", "note": f"SSH: {e}"}
 
 async def _run_autoremove_debian(conn):
@@ -379,23 +347,24 @@ async def autoremove_host_stream(host: Dict[str, Any]):
     if not ip or not user:
         yield {"type": "result", "result": {"status": "error", "note": "IP/User fehlt"}}
         return
+    dispatched = False
     try:
         async with connect_host(host) as conn:
             distro = await _detect_distro(conn)
             if distro != "debian":
                 yield {"type": "result", "result": {"status": "error", "note": "Autoremove nur Debian implementiert"}}
                 return
-            rc = 0
+            dispatched = True
+            rc = 1
             async for line in _run_autoremove_debian(conn):
-                if line.startswith("[RC="):
-                    try: rc = int(line[4:-1])
-                    except: rc = 0
+                if isinstance(line, CommandExit):
+                    rc = line.status
                 else:
                     yield {"type": "line", "line": line}
             yield {"type": "result", "result": {"status": "ok" if rc == 0 else "error", "note": f"rc={rc}", "distro": distro}}
             return
-    except (asyncssh.Error, OSError) as e:
-        yield {"type": "result", "result": {"status": "error", "note": f"SSH: {e}"}}
+    except (asyncssh.Error, OSError, UpdateCheckError) as e:
+        yield {"type": "result", "result": {"status": "unknown" if dispatched else "error", "note": (f"Remote-Zustand unbekannt: {e}. Vor erneutem Start am Host prüfen." if dispatched else f"SSH: {e}")}}
         return
 
 # ---------- Reboot ----------
@@ -409,6 +378,7 @@ async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
+    dispatched = False
     try:
         async with connect_host(host) as conn:
             code, _, err = await _run(conn, "command -v systemd-run", timeout=10)
@@ -425,6 +395,7 @@ async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
 
             prefix = "" if user == "root" else "sudo -n "
             cmd = f"{prefix}systemd-run --quiet --on-active=2s systemctl reboot"
+            dispatched = True
             code, _, err = await _run(conn, cmd, timeout=10)
             if code == 0:
                 return {
@@ -433,14 +404,16 @@ async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
                 }
 
             if code == 124:
-                note = "Reboot konnte nicht bestätigt werden: Zeitüberschreitung beim Einplanen."
+                note = "Reboot konnte nicht bestätigt werden: Remote-Zustand unbekannt; Zeitüberschreitung beim Einplanen."
             else:
                 detail = (err or "").strip().splitlines()
                 suffix = f": {detail[0][:300]}" if detail else ""
                 note = f"Reboot konnte nicht eingeplant werden (Exitcode {code}){suffix}"
-            return {"host_id": host["id"], "name": name, "status": "error", "note": note}
-    except (asyncssh.Error, OSError) as e:
+            return {"host_id": host["id"], "name": name,
+                    "status": "unknown" if code == 124 else "error", "note": note}
+    except (asyncssh.Error, OSError, UpdateCheckError) as e:
         return {
-            "host_id": host["id"], "name": name, "status": "error",
-            "note": f"Reboot konnte nicht bestätigt werden: SSH: {e}",
+            "host_id": host["id"], "name": name, "status": "unknown" if dispatched else "error",
+            "note": f"Reboot konnte nicht bestätigt werden: SSH: {e}" +
+                    (". Remote-Zustand unbekannt; vor erneutem Start am Host prüfen." if dispatched else ""),
         }

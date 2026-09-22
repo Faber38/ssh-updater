@@ -4,6 +4,7 @@ import socket
 import shutil
 import subprocess
 import ipaddress
+import asyncio
 
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -11,6 +12,7 @@ from datetime import datetime, timedelta
 from PyQt6 import QtWidgets, QtGui, QtCore
 
 from sshupdater.core import settings
+from .ui_text import PlainTextLog, PlainMessageBox
 
 # Optional nur für Windows-Infos (auf Linux nicht nötig)
 try:
@@ -75,6 +77,7 @@ class SysInfoWidget(QtWidgets.QFrame):
             lab_k.setProperty("class", "key")
             lab_v = QtWidgets.QLabel("–")
             lab_v.setProperty("class", "value")
+            lab_v.setTextFormat(QtCore.Qt.TextFormat.PlainText)
             grid.addWidget(lab_k, row, 0)
             grid.addWidget(lab_v, row, 1)
             return lab_v
@@ -181,7 +184,7 @@ class SysInfoWidget(QtWidgets.QFrame):
     def _ips_str(self) -> str:
         try:
             out = subprocess.check_output(
-                ["ip", "-4", "addr"], text=True, errors="ignore"
+                ["ip", "-4", "addr"], text=True, errors="ignore", timeout=2
             )
             ips = []
             for line in out.splitlines():
@@ -338,6 +341,7 @@ class SysInfoWidget(QtWidgets.QFrame):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    timeout=2,
                 )
                 ssh_status = out.stdout.strip()
                 if ssh_status == "active":
@@ -375,7 +379,7 @@ class SysInfoWidget(QtWidgets.QFrame):
             ips = "–"
             ssh_state = "–"
 
-        self.lab_host.setText(f"Hostname: <b>{host}</b>")
+        self.lab_host.setText(f"Hostname: {host}")
         self.lab_os.setText(f"OS: {os_name}")
         self.lab_kernel.setText(f"Kernel: {kernel}")
         self.lab_uptime.setText(f"Uptime: {uptime}")
@@ -404,7 +408,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_reboot = QtGui.QAction("Reboot", self)
         self.act_config = QtGui.QAction("Konfiguration", self)
         self.act_stop = QtGui.QAction("Stopp", self)
-        self.act_stop.setToolTip("Nach dem aktuell laufenden Host anhalten")
+        self.act_stop.setToolTip("Lokales Warten beenden; Remote-Zustand anschließend prüfen")
         self.act_stop.setEnabled(False)
 
         self.act_toggle_checks = QtGui.QAction("Haken", self)
@@ -472,7 +476,7 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
         # Log
-        self.log = QtWidgets.QTextEdit()
+        self.log = PlainTextLog()
         self.log.setReadOnly(True)
         self.log.setPlaceholderText("Logs …")
 
@@ -609,7 +613,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         selected = self._get_selected_host_ids()
         if not selected:
-            QtWidgets.QMessageBox.information(
+            PlainMessageBox.information(
                 self, "Keine Auswahl", "Bitte zuerst Hosts auswählen (Haken setzen)."
             )
             for a in (
@@ -629,6 +633,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker = _CheckWorker(selected)
         self.worker.one_result.connect(self._on_check_result)
         self.worker.finished_all.connect(self._on_check_done)
+        self.act_stop.setEnabled(True)
         self.worker.start()
 
     def _on_check_result(self, res: dict):
@@ -636,6 +641,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log.append(
                 f"✔ {res['name']} [{res.get('distro', '?')}]: {res.get('updates', 0)} Updates"
             )
+            if res.get("note"):
+                self.log.append(res["note"])
             online = True
             updates = int(res.get("updates", 0))
         else:
@@ -653,7 +660,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 status_item = QtGui.QStandardItem(status_text)
                 status_item.setIcon(self._status_icon_for(True, updates))
             else:
-                status_item = QtGui.QStandardItem("Offline")
+                status_item = QtGui.QStandardItem(
+                    "Remote-Zustand unbekannt" if res.get("status") == "unknown" else "Prüfung fehlgeschlagen")
                 status_item.setIcon(self._status_icon_for(False, None))
 
             model.setItem(row, 5, status_item)
@@ -672,6 +680,8 @@ class MainWindow(QtWidgets.QMainWindow):
         fatal_error = getattr(self.worker, "fatal_error", None)
         if fatal_error:
             self.log.append(f"\nPrüfung wegen internem Fehler beendet: {fatal_error}")
+        elif getattr(self.worker, "stop_requested", False):
+            self.log.append("\nLokales Warten beendet; keine weiteren Hosts gestartet.")
         else:
             self.log.append("\nFertig.")
         self.act_stop.setEnabled(False)
@@ -699,7 +709,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         selected = self._get_selected_host_ids()
         if not selected:
-            QtWidgets.QMessageBox.information(
+            PlainMessageBox.information(
                 self, "Keine Auswahl", "Bitte zuerst Hosts auswählen (Haken setzen)."
             )
             for a in (
@@ -719,6 +729,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sim_worker = _SimWorker(selected)
         self.sim_worker.one_result.connect(self._on_sim_result)
         self.sim_worker.finished_all.connect(self._on_sim_done)
+        self.act_stop.setEnabled(True)
         self.sim_worker.start()
 
     def _on_sim_result(self, res: dict):
@@ -727,6 +738,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.log.append(
                 f"🧪 {res['name']} [{res.get('distro', '?')}]: {n} Pakete geplant"
             )
+            if res.get("note"):
+                self.log.append(res["note"])
             details = (res.get("details") or "").strip()
             if details:
                 lines = details.splitlines()
@@ -745,6 +758,8 @@ class MainWindow(QtWidgets.QMainWindow):
         fatal_error = getattr(self.sim_worker, "fatal_error", None)
         if fatal_error:
             self.log.append(f"\nSimulation wegen internem Fehler beendet: {fatal_error}")
+        elif getattr(self.sim_worker, "stop_requested", False):
+            self.log.append("\nLokales Warten beendet; keine weiteren Hosts gestartet.")
         else:
             self.log.append("\nFertig.")
         self.act_stop.setEnabled(False)
@@ -759,37 +774,32 @@ class MainWindow(QtWidgets.QMainWindow):
             a.setEnabled(True)
 
     def _on_stop_requested(self):
-        worker = None
-        if hasattr(self, "upg_worker") and self.upg_worker.isRunning():
-            worker = self.upg_worker
-        elif hasattr(self, "clean_run_worker") and self.clean_run_worker.isRunning():
-            worker = self.clean_run_worker
-
-        if worker is None:
-            self.act_stop.setEnabled(False)
-            return
-
-        worker.request_stop()
+        active = [getattr(self, name, None) for name in
+                  ("worker", "sim_worker", "upg_worker", "clean_sim_worker", "clean_run_worker", "reboot_worker")]
+        for worker in active:
+            if isinstance(worker, _CancellableWorker) and worker.isRunning():
+                worker.request_stop()
         self.act_stop.setEnabled(False)
         self.statusBar().showMessage(
-            "Stopp angefordert – aktueller Host wird noch beendet ..."
+            "Lokales Warten wird beendet – Remote-Zustand unbekannt ..."
         )
         self.log.append(
-            "\n⏹ Stopp angefordert. Der aktuell laufende Host wird noch sauber beendet; "
-            "danach wird nicht mit dem nächsten Host fortgefahren."
+            "\n⏹ Lokales Warten wird beendet. Remote-Zustand unbekannt: "
+            "Der Remote-Prozess kann weiterlaufen. Vor erneutem Start am Host prüfen. "
+            "Weitere Hosts werden nicht gestartet."
         )
         self.log.moveCursor(QtGui.QTextCursor.MoveOperation.End)
 
     # ========= Upgraden =========
     def _on_upgrade(self):
-        ret = QtWidgets.QMessageBox.question(
+        ret = PlainMessageBox.question(
             self,
             "Upgrade starten",
-            "Alle gelisteten Hosts jetzt upgraden?\n\n"
+            "Ausgewählte Hosts jetzt upgraden?\n\n"
             "Hinweis: Es werden Paket-Upgrades per sudo -n ausgeführt.\n"
             "Stelle sicher, dass NOPASSWD für die Paketbefehle konfiguriert ist.",
         )
-        if ret != QtWidgets.QMessageBox.StandardButton.Yes:
+        if ret != PlainMessageBox.StandardButton.Yes:
             return
 
         for a in (
@@ -804,7 +814,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         selected = self._get_selected_host_ids()
         if not selected:
-            QtWidgets.QMessageBox.information(
+            PlainMessageBox.information(
                 self, "Keine Auswahl", "Bitte zuerst Hosts auswählen (Haken setzen)."
             )
             for a in (
@@ -862,14 +872,14 @@ class MainWindow(QtWidgets.QMainWindow):
         fatal_error = getattr(self.upg_worker, "fatal_error", None)
         stopped = bool(getattr(self.upg_worker, "stop_requested", False))
         if fatal_error:
-            self.log.append(f"\nUpgrade wegen internem Fehler beendet: {fatal_error}")
-            self.statusBar().showMessage("Upgrade mit Fehler beendet", 5000)
+            self.log.append(f"\nLokaler Upgrade-Lauf wegen internem Fehler beendet: {fatal_error}")
+            self.statusBar().showMessage("Lokaler Upgrade-Lauf mit Fehler beendet", 5000)
         elif stopped:
-            self.log.append("\nUpgrade-Lauf nach aktuellem Host gestoppt.")
-            self.statusBar().showMessage("Upgrade gestoppt", 5000)
+            self.log.append("\nLokales Warten beendet; Remote-Zustand gegebenenfalls unbekannt.")
+            self.statusBar().showMessage("Lokales Warten beendet – Remote-Zustand prüfen", 5000)
         else:
-            self.log.append("\nAlle Upgrades beendet.")
-            self.statusBar().showMessage("Upgrade abgeschlossen", 5000)
+            self.log.append("\nLokaler Upgrade-Lauf beendet; Ergebnisse der einzelnen Hosts beachten.")
+            self.statusBar().showMessage("Lokaler Upgrade-Lauf beendet – Ergebnisse prüfen", 5000)
         self.act_stop.setEnabled(False)
         for a in (
             self.act_check,
@@ -885,11 +895,12 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_clean(self):
         selected = self._get_selected_host_ids()
         if not selected:
-            QtWidgets.QMessageBox.information(
+            PlainMessageBox.information(
                 self, "Keine Auswahl", "Bitte Hosts anhaken."
             )
             return
         self._clean_selected = selected
+        self._clean_results = {}
 
         for a in (
             self.act_check,
@@ -907,12 +918,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.clean_sim_worker = _CleanSimWorker(selected)
         self.clean_sim_worker.one_result.connect(self._on_clean_sim_result)
         self.clean_sim_worker.finished_all.connect(self._on_clean_sim_done)
+        self.act_stop.setEnabled(True)
         self.clean_sim_worker.start()
 
     def _on_clean_sim_result(self, res: dict):
+        self._clean_results[res.get("host_id")] = res.get("status")
         if res.get("status") == "ok":
             n = res.get("packages", 0)
             self.log.append(f"🧪 {res['name']}: {n} Pakete würden entfernt.")
+            if res.get("note"):
+                self.log.append(res["note"])
             details = (res.get("details") or "").strip()
             if details:
                 lines = details.splitlines()
@@ -932,9 +947,13 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def _on_clean_sim_done(self):
         fatal_error = getattr(self.clean_sim_worker, "fatal_error", None)
-        if fatal_error:
+        self.act_stop.setEnabled(False)
+        stopped = (getattr(self.clean_sim_worker, "stop_requested", False)
+                   or getattr(self, '_closing', False))
+        if fatal_error or stopped:
             self.log.append(
-                f"\nAutoremove-Simulation wegen internem Fehler beendet: {fatal_error}"
+                ("\nAutoremove-Simulation lokal gestoppt; keine Bereinigung gestartet." if stopped else
+                 f"\nAutoremove-Simulation wegen internem Fehler beendet: {fatal_error}")
             )
             self.act_stop.setEnabled(False)
             for a in (
@@ -949,12 +968,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self._clean_selected = []
             return
 
-        text = self.log.toPlainText()
-        any_removals = (
-            "würden entfernt" in text and "0 Pakete würden entfernt" not in text
-        )
-
-        sel = getattr(self, "_clean_selected", [])
+        selected = getattr(self, "_clean_selected", [])
+        results = getattr(self, "_clean_results", {})
+        sel = [hid for hid in selected if results.get(hid) == "ok"]
+        excluded = len(selected) - len(sel)
+        if excluded:
+            self.log.append(f"\n{excluded} Host(s) ohne erfolgreiche Simulation ausgeschlossen. "
+                            "Für diese Hosts ist eine neue Simulation erforderlich.")
         if not sel:
             self.log.append("\nAbgebrochen (keine Auswahl).")
             for a in (
@@ -968,14 +988,16 @@ class MainWindow(QtWidgets.QMainWindow):
                 a.setEnabled(True)
             return
 
-        ret = QtWidgets.QMessageBox.question(
+        ret = PlainMessageBox.question(
             self,
             "Autoremove ausführen",
-            "Simulation abgeschlossen.\nJetzt auf den ausgewählten Hosts 'apt autoremove --purge' ausführen?",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.No,
+            f"Simulation erfolgreich für {len(sel)} Host(s).\n"
+            f"{excluded} Host(s) ausgeschlossen.\n"
+            "Jetzt nur auf den erfolgreich simulierten Hosts 'apt autoremove --purge' ausführen?",
+            PlainMessageBox.StandardButton.Yes
+            | PlainMessageBox.StandardButton.No,
         )
-        if ret != QtWidgets.QMessageBox.StandardButton.Yes:
+        if ret != PlainMessageBox.StandardButton.Yes:
             self.log.append("\nAbgebrochen.")
             for a in (
                 self.act_check,
@@ -1019,15 +1041,15 @@ class MainWindow(QtWidgets.QMainWindow):
         stopped = bool(getattr(self.clean_run_worker, "stop_requested", False))
         if fatal_error:
             self.log.append(
-                f"\nBereinigung wegen internem Fehler beendet: {fatal_error}"
+                f"\nLokaler Bereinigungslauf wegen internem Fehler beendet: {fatal_error}"
             )
-            self.statusBar().showMessage("Bereinigung mit Fehler beendet", 5000)
+            self.statusBar().showMessage("Lokaler Bereinigungslauf mit Fehler beendet", 5000)
         elif stopped:
-            self.log.append("\nBereinigung nach aktuellem Host gestoppt.")
-            self.statusBar().showMessage("Bereinigung gestoppt", 5000)
+            self.log.append("\nLokales Warten beendet; Remote-Zustand gegebenenfalls unbekannt.")
+            self.statusBar().showMessage("Lokales Warten beendet – Remote-Zustand prüfen", 5000)
         else:
-            self.log.append("\nBereinigung beendet.")
-            self.statusBar().showMessage("Bereinigung abgeschlossen", 5000)
+            self.log.append("\nLokaler Bereinigungslauf beendet; Ergebnisse der einzelnen Hosts beachten.")
+            self.statusBar().showMessage("Lokaler Bereinigungslauf beendet – Ergebnisse prüfen", 5000)
         self.act_stop.setEnabled(False)
         for a in (
             self.act_check,
@@ -1044,17 +1066,17 @@ class MainWindow(QtWidgets.QMainWindow):
     def _on_reboot(self):
         selected = self._get_selected_host_ids()
         if not selected:
-            QtWidgets.QMessageBox.information(
+            PlainMessageBox.information(
                 self, "Keine Auswahl", "Bitte Hosts anhaken."
             )
             return
 
-        ret = QtWidgets.QMessageBox.question(
+        ret = PlainMessageBox.question(
             self,
             "Reboot ausführen",
             f"Sollen {len(selected)} ausgewählte Host(s) neu gestartet werden?\nHinweis: Der SSH-Stream bricht ggf. sofort ab.",
         )
-        if ret != QtWidgets.QMessageBox.StandardButton.Yes:
+        if ret != PlainMessageBox.StandardButton.Yes:
             return
 
         for a in (
@@ -1073,6 +1095,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.reboot_worker = _RebootWorker(selected)
         self.reboot_worker.host_done.connect(self._on_reboot_host_done)
         self.reboot_worker.finished_all.connect(self._on_reboot_done)
+        self.act_stop.setEnabled(True)
         self.reboot_worker.start()
 
     def _on_reboot_host_done(self, res: dict):
@@ -1086,6 +1109,8 @@ class MainWindow(QtWidgets.QMainWindow):
         fatal_error = getattr(self.reboot_worker, "fatal_error", None)
         if fatal_error:
             self.log.append(f"\nReboot wegen internem Fehler beendet: {fatal_error}")
+        elif getattr(self.reboot_worker, "stop_requested", False):
+            self.log.append("\nLokales Warten beendet; keine weiteren Hosts gestartet.")
         else:
             self.log.append("\nReboot-Befehle abgesetzt.")
         self.act_stop.setEnabled(False)
@@ -1144,6 +1169,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self._sync_toggle_action()
 
     def closeEvent(self, event):
+        already_closing = getattr(self, '_closing', False)
+        self._closing = True
+        self.setEnabled(False)
+        active = [getattr(self, name, None) for name in
+                  ("worker", "sim_worker", "upg_worker", "clean_sim_worker", "clean_run_worker", "reboot_worker")]
+        if any(isinstance(worker, QtCore.QThread) and worker.isRunning() for worker in active):
+            if not already_closing:
+                self._on_stop_requested()
+            self.statusBar().showMessage("Bitte warten, bis das lokale Warten beendet ist.")
+            event.ignore()
+            QtCore.QTimer.singleShot(100, self.close)
+            return
         try:
             self._qset.setValue("win/geometry", self.saveGeometry())
 
@@ -1191,7 +1228,46 @@ class MainWindow(QtWidgets.QMainWindow):
             self.act_toggle_checks.blockSignals(False)
 
 
-class _CheckWorker(QtCore.QThread):
+class _CancellableWorker(QtCore.QThread):
+    def __init__(self):
+        super().__init__()
+        self.stop_requested = False
+        self._loop = None
+        self._task = None
+
+    def request_stop(self):
+        if self.stop_requested:
+            return
+        self.stop_requested = True
+        loop = self._loop
+        if loop is not None:
+            try:
+                loop.call_soon_threadsafe(self._cancel_current)
+            except RuntimeError:
+                pass  # The event loop already finished.
+
+    def _cancel_current(self):
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
+    async def _call(self, host, operation):
+        self._loop = asyncio.get_running_loop()
+        self._task = asyncio.create_task(operation(host))
+        if self.stop_requested:
+            self._task.cancel()
+        try:
+            return await self._task
+        except asyncio.CancelledError:
+            return {"host_id": host["id"], "name": host.get("name", "?"),
+                    "status": "unknown",
+                    "note": "Remote-Zustand unbekannt: Benutzer hat das lokale Warten beendet. "
+                            "Der Remote-Prozess kann weiterlaufen; vor erneutem Start am Host prüfen."}
+        finally:
+            self._task = None
+            self._loop = None
+
+
+class _CheckWorker(_CancellableWorker):
     one_result = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
@@ -1210,6 +1286,8 @@ class _CheckWorker(QtCore.QThread):
 
             async def _job():
                 for h in hosts:
+                    if self.stop_requested:
+                        break
                     if not h.get("primary_ip") or not h.get("user"):
                         self.one_result.emit(
                             {
@@ -1220,7 +1298,7 @@ class _CheckWorker(QtCore.QThread):
                             }
                         )
                         continue
-                    res = await ssh_client.check_updates_for_host(h)
+                    res = await self._call(h, ssh_client.check_updates_for_host)
                     res.setdefault("host_id", h["id"])
                     self.one_result.emit(res)
 
@@ -1234,7 +1312,7 @@ class _CheckWorker(QtCore.QThread):
             self.finished_all.emit()
 
 
-class _SimWorker(QtCore.QThread):
+class _SimWorker(_CancellableWorker):
     one_result = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
@@ -1253,6 +1331,8 @@ class _SimWorker(QtCore.QThread):
 
             async def _job():
                 for h in hosts:
+                    if self.stop_requested:
+                        break
                     if not h.get("primary_ip") or not h.get("user"):
                         self.one_result.emit(
                             {
@@ -1264,7 +1344,7 @@ class _SimWorker(QtCore.QThread):
                         )
                         continue
                     try:
-                        res = await ssh_client.simulate_upgrade_for_host(h)
+                        res = await self._call(h, ssh_client.simulate_upgrade_for_host)
                         res.setdefault("host_id", h["id"])
                         self.one_result.emit(res)
                     except Exception as ex:
@@ -1287,7 +1367,61 @@ class _SimWorker(QtCore.QThread):
             self.finished_all.emit()
 
 
-class _UpgradeWorker(QtCore.QThread):
+class _ActionWorker(_CancellableWorker):
+    async def _action(self, host, operation):
+        name = host.get("name", "?")
+        self._loop = asyncio.get_running_loop()
+        pending = []
+        size = 0
+
+        def flush():
+            nonlocal size
+            if pending:
+                self.progress.emit({"name": name, "line": "\n".join(pending)})
+                pending.clear()
+            size = 0
+
+        async def flush_periodically():
+            while True:
+                await asyncio.sleep(0.1)
+                flush()
+
+        async def consume():
+            nonlocal size
+            from contextlib import aclosing
+            async with aclosing(operation(host)) as messages:
+                async for msg in messages:
+                    if msg.get("type") == "line":
+                        line = msg["line"]
+                        pending.append(line)
+                        size += len(line) + 1
+                        if size >= 8192 or len(pending) >= 512:
+                            flush()
+                    elif msg.get("type") == "result":
+                        flush()
+                        res = dict(msg["result"], host_id=host["id"], name=name)
+                        self.host_done.emit(res)
+
+        flusher = asyncio.create_task(flush_periodically())
+        self._task = asyncio.create_task(consume())
+        if self.stop_requested:
+            self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            flush()
+            self.host_done.emit({"host_id": host["id"], "name": name, "status": "unknown",
+                                 "note": "Remote-Zustand unbekannt: Benutzer hat das lokale Warten beendet. "
+                                         "Der Remote-Prozess kann weiterlaufen; vor erneutem Start am Host prüfen."})
+        finally:
+            flusher.cancel()
+            await asyncio.gather(flusher, return_exceptions=True)
+            flush()
+            self._task = None
+            self._loop = None
+
+
+class _UpgradeWorker(_ActionWorker):
     progress = QtCore.pyqtSignal(dict)
     host_started = QtCore.pyqtSignal(dict)
     host_done = QtCore.pyqtSignal(dict)
@@ -1298,9 +1432,6 @@ class _UpgradeWorker(QtCore.QThread):
         self.host_ids = host_ids
         self.stop_requested = False
         self.fatal_error = None
-
-    def request_stop(self):
-        self.stop_requested = True
 
     def run(self):
         try:
@@ -1329,16 +1460,7 @@ class _UpgradeWorker(QtCore.QThread):
                         )
                         continue
                     try:
-                        agen = ssh_client.upgrade_host_stream(h)
-                        async for msg in agen:
-                            if not isinstance(msg, dict):
-                                continue
-                            if msg.get("type") == "line":
-                                self.progress.emit({"name": name, "line": msg["line"]})
-                            elif msg.get("type") == "result":
-                                res = msg["result"] or {}
-                                res.update({"host_id": h["id"], "name": name})
-                                self.host_done.emit(res)
+                        await self._action(h, ssh_client.upgrade_host_stream)
                     except Exception as ex:
                         self.host_done.emit(
                             {
@@ -1359,7 +1481,7 @@ class _UpgradeWorker(QtCore.QThread):
             self.finished_all.emit()
 
 
-class _CleanSimWorker(QtCore.QThread):
+class _CleanSimWorker(_CancellableWorker):
     one_result = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
@@ -1378,7 +1500,9 @@ class _CleanSimWorker(QtCore.QThread):
 
             async def _job():
                 for h in hosts:
-                    res = await ssh_client.simulate_autoremove_for_host(h)
+                    if self.stop_requested:
+                        break
+                    res = await self._call(h, ssh_client.simulate_autoremove_for_host)
                     self.one_result.emit(res)
 
             asyncio.run(_job())
@@ -1391,7 +1515,7 @@ class _CleanSimWorker(QtCore.QThread):
             self.finished_all.emit()
 
 
-class _CleanRunWorker(QtCore.QThread):
+class _CleanRunWorker(_ActionWorker):
     progress = QtCore.pyqtSignal(dict)
     host_started = QtCore.pyqtSignal(dict)
     host_done = QtCore.pyqtSignal(dict)
@@ -1402,9 +1526,6 @@ class _CleanRunWorker(QtCore.QThread):
         self.host_ids = host_ids
         self.stop_requested = False
         self.fatal_error = None
-
-    def request_stop(self):
-        self.stop_requested = True
 
     def run(self):
         try:
@@ -1423,14 +1544,7 @@ class _CleanRunWorker(QtCore.QThread):
                     self.host_started.emit({"host_id": h["id"], "name": name})
 
                     try:
-                        agen = ssh_client.autoremove_host_stream(h)
-                        async for msg in agen:
-                            if isinstance(msg, dict) and msg.get("type") == "line":
-                                self.progress.emit({"name": name, "line": msg["line"]})
-                            elif isinstance(msg, dict) and msg.get("type") == "result":
-                                res = msg["result"] or {}
-                                res.update({"host_id": h["id"], "name": name})
-                                self.host_done.emit(res)
+                        await self._action(h, ssh_client.autoremove_host_stream)
                     except Exception as ex:
                         self.host_done.emit(
                             {
@@ -1451,7 +1565,7 @@ class _CleanRunWorker(QtCore.QThread):
             self.finished_all.emit()
 
 
-class _RebootWorker(QtCore.QThread):
+class _RebootWorker(_CancellableWorker):
     host_done = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
@@ -1470,8 +1584,10 @@ class _RebootWorker(QtCore.QThread):
 
             async def _job():
                 for h in hosts:
+                    if self.stop_requested:
+                        break
                     try:
-                        res = await ssh_client.reboot_host(h)
+                        res = await self._call(h, ssh_client.reboot_host)
                         res.setdefault("host_id", h["id"])
                         self.host_done.emit(res)
                     except Exception as ex:

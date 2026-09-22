@@ -91,7 +91,7 @@ QLabel {
 }
 
 /* Log-Feld */
-QTextEdit {
+QPlainTextEdit {
     background-color: #ffffff;
     border: 1px solid #cccccc;
     border-radius: 4px;
@@ -132,7 +132,7 @@ QTableView::item:selected {
 }
 
 /* Eingabefelder: dezenter Fokus-Ring */
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QTextEdit:focus {
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {
     border: 2px solid #7aa7ff;
     padding: 3px 5px;             /* 1px weniger, damit Gesamthöhe gleich bleibt */
     background-color: #ffffff;
