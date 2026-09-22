@@ -1,6 +1,7 @@
 name: Build and Release SSH Updater
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -8,13 +9,12 @@ on:
 permissions:
   contents: read
 
-env:
-  RELEASE_TAG: ${{ github.ref_name }}
-
 jobs:
   # ---------- Linux-Build ----------
   build-linux:
     runs-on: ubuntu-24.04
+    outputs:
+      release_tag: ${{ steps.validate.outputs.release_tag }}
 
     steps:
       - name: Checkout repository
@@ -27,8 +27,9 @@ jobs:
         with:
           python-version-file: release-python.txt
 
-      - name: Validate tag and application version
-        run: python scripts/release.py tag
+      - name: Validate build mode and application version
+        id: validate
+        run: python scripts/release.py workflow
 
       - name: Install Linux system dependency
         run: |
@@ -59,20 +60,24 @@ jobs:
         run: ./dist/ssh-updater --smoke-test
 
       - name: Create Linux archive
+        env:
+          ARTIFACT_LABEL: ${{ steps.validate.outputs.artifact_label }}
         run: |
           cd dist
-          tar czf "ssh-updater-${RELEASE_TAG}-linux-x86_64.tar.gz" ssh-updater
+          tar czf "ssh-updater-${ARTIFACT_LABEL}-linux-x86_64.tar.gz" ssh-updater
           ls -l
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: ssh-updater-linux
-          path: dist/ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz
+          path: dist/ssh-updater-${{ steps.validate.outputs.artifact_label }}-linux-x86_64.tar.gz
 
   # ---------- Windows-Build ----------
   build-windows:
     runs-on: windows-2022
+    outputs:
+      release_tag: ${{ steps.validate.outputs.release_tag }}
 
     steps:
       - name: Check out repository
@@ -85,8 +90,9 @@ jobs:
         with:
           python-version-file: release-python.txt
 
-      - name: Validate tag and application version
-        run: python scripts/release.py tag
+      - name: Validate build mode and application version
+        id: validate
+        run: python scripts/release.py workflow
 
       - name: Install dependencies
         run: |
@@ -113,21 +119,27 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Create Windows ZIP
+        env:
+          ARTIFACT_LABEL: ${{ steps.validate.outputs.artifact_label }}
         run: |
           cd dist
           echo "📦 Creating Windows ZIP..."
           dir
-          Compress-Archive -LiteralPath "ssh-updater.exe" -DestinationPath "ssh-updater-${env:RELEASE_TAG}-windows-x86_64.zip"
+          Compress-Archive -LiteralPath "ssh-updater.exe" -DestinationPath "ssh-updater-${env:ARTIFACT_LABEL}-windows-x86_64.zip"
           dir
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: ssh-updater-windows
-          path: dist/ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
+          path: dist/ssh-updater-${{ steps.validate.outputs.artifact_label }}-windows-x86_64.zip
 
   # ---------- Release erstellen & Assets anhängen ----------
   release:
+    if: >-
+      github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') &&
+      needs.build-linux.outputs.release_tag != '' &&
+      needs.build-linux.outputs.release_tag == needs.build-windows.outputs.release_tag
     permissions:
       contents: write
     needs: [build-linux, build-windows]
@@ -147,8 +159,9 @@ jobs:
       - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.build-linux.outputs.release_tag }}
           files: |
-            dist/ssh-updater-linux/ssh-updater-${{ github.ref_name }}-linux-x86_64.tar.gz
-            dist/ssh-updater-windows/ssh-updater-${{ github.ref_name }}-windows-x86_64.zip
+            dist/ssh-updater-linux/ssh-updater-${{ needs.build-linux.outputs.release_tag }}-linux-x86_64.tar.gz
+            dist/ssh-updater-windows/ssh-updater-${{ needs.build-linux.outputs.release_tag }}-windows-x86_64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
