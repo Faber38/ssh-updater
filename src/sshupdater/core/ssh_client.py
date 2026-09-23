@@ -3,6 +3,7 @@ import asyncssh, logging, re
 from collections import deque
 from typing import Dict, Any, Tuple
 from .ssh_connection import connect_host
+from . import credentials
 from .remote_process import capture, stream, CommandExit, RemoteTimeoutError, STREAM_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -100,9 +101,7 @@ async def _check_arch(conn):
 
 async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
     name = host.get("name") or f"id:{host['id']}"
-    ip = host.get("primary_ip")
-    port = int(host.get("port") or 22)
-    user = host.get("user") or "root"
+    ip, user, _ = credentials.normalize_target(host)
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
@@ -158,9 +157,7 @@ async def _sim_arch(conn):
 async def simulate_upgrade_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
     """Gibt geplante Paketupdates zurück (ohne Änderungen)."""
     name = host.get("name") or f"id:{host['id']}"
-    ip = host.get("primary_ip")
-    port = int(host.get("port") or 22)
-    user = host.get("user") or "root"
+    ip, user, _ = credentials.normalize_target(host)
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
@@ -244,9 +241,7 @@ async def upgrade_host_stream(host: Dict[str, Any]):
       - am Ende ein dict: {"type":"result","result": {"status": "...", "note": "...", "distro": "..."}}
     """
     name = host.get("name") or f"id:{host['id']}"
-    ip = host.get("primary_ip")
-    port = int(host.get("port") or 22)
-    user = host.get("user") or "root"
+    ip, user, _ = credentials.normalize_target(host)
     if not ip or not user:
         # Ergebnis "yielden", nicht returnen
         yield {"type": "result", "result": {"status": "error", "note": "IP/User fehlt"}}
@@ -322,7 +317,7 @@ async def _sim_autoremove_debian(conn):
 
 async def simulate_autoremove_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
     name = host.get("name") or f"id:{host['id']}"
-    ip, port, user = host.get("primary_ip"), int(host.get("port") or 22), host.get("user") or "root"
+    ip, user, _ = credentials.normalize_target(host)
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
@@ -343,7 +338,7 @@ async def _run_autoremove_debian(conn):
 async def autoremove_host_stream(host: Dict[str, Any]):
     """Async-Generator: liefert {'type':'line','line':...} und am Ende {'type':'result',...}."""
     name = host.get("name") or f"id:{host['id']}"
-    ip, port, user = host.get("primary_ip"), int(host.get("port") or 22), host.get("user") or "root"
+    ip, user, _ = credentials.normalize_target(host)
     if not ip or not user:
         yield {"type": "result", "result": {"status": "error", "note": "IP/User fehlt"}}
         return
@@ -372,9 +367,7 @@ async def autoremove_host_stream(host: Dict[str, Any]):
 async def reboot_host(host: Dict[str, Any]) -> Dict[str, Any]:
     """Plant einen leicht verzögerten Reboot und bestätigt dessen Exitcode."""
     name = host.get("name") or f"id:{host['id']}"
-    ip = host.get("primary_ip")
-    port = int(host.get("port") or 22)
-    user = host.get("user") or "root"
+    ip, user, _ = credentials.normalize_target(host)
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 

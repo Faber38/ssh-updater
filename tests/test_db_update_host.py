@@ -33,22 +33,12 @@ class UpdateHostTests(unittest.TestCase):
         self._db_path.start()
         self.db.init_db()
 
-        self._encrypt = mock.patch.object(
-            self.db.crypto,
-            "encrypt_str",
-            side_effect=lambda value: f"encrypted:{value}".encode(),
-        )
-        self._decrypt = mock.patch.object(
-            self.db.crypto,
-            "decrypt_str",
-            side_effect=lambda token: token.decode().removeprefix("encrypted:"),
-        )
-        self._encrypt.start()
-        self._decrypt.start()
+        from cryptography.fernet import Fernet
+        self._fernet = mock.patch.object(self.db.crypto, '_FERNET', Fernet(Fernet.generate_key()))
+        self._fernet.start()
 
     def tearDown(self):
-        self._decrypt.stop()
-        self._encrypt.stop()
+        self._fernet.stop()
         self._db_path.stop()
         self._tempdir.cleanup()
 
@@ -71,7 +61,7 @@ class UpdateHostTests(unittest.TestCase):
                 "admin",
                 "password",
                 None,
-                b"encrypted:altes-passwort",
+                None,
                 "debian",
                 '["production", "database"]',
                 "2026-08-31 12:00:00",
@@ -81,6 +71,7 @@ class UpdateHostTests(unittest.TestCase):
         host_id = cur.lastrowid
         con.commit()
         con.close()
+        self.db.set_host_password(host_id, "altes-passwort")
         return host_id
 
     def test_rename_updates_same_record_and_preserves_unedited_fields(self):

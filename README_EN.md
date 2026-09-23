@@ -127,7 +127,34 @@ controls the SSH sessions it creates itself.
 Changing host/IP, username or port requires re-entering or explicitly removing a
 stored password. Switching to key authentication at the same target offers an
 explicit keep/delete choice. There is no automatic credential deletion on upgrade.
-The vault format, PBKDF2 parameters, master password and database schema are unchanged.
+Newly entered SSH passwords use **Credential V2**. Its Fernet-encrypted, authenticated
+payload binds the password to the stable `hosts.id`, stored host/alias string, username
+and port. Display names, tags and check results are not part of the binding. There is
+no DNS normalization.
+
+Existing Legacy/V1 passwords are preserved unchanged. Before the next password login,
+each affected host requires an explicit confirmation showing its name, target, username
+and port with an **empty password field**. Only re-entering the password and choosing
+“Als V2 speichern” creates V2. Cancelling preserves the old token and prevents the action
+from starting; individually confirmed hosts stay confirmed. Re-entering the password in
+host configuration is also supported. The old plaintext is never displayed or prefilled,
+and legacy tokens are never automatically repackaged. **Key-based hosts are unaffected**,
+even if an old password is retained.
+
+Immediately before each SSH connection, an immutable context is read from one database
+row, including target, username, port, authentication method, key path and credential.
+If it differs from the worker's snapshot, the action is rejected. V2 is checked against
+exactly that context. Unknown versions, damaged payloads and binding mismatches fail
+closed without a legacy fallback. Unlock checks cryptographic readability for V1 and
+additionally validates structure and host binding for V2.
+
+Existing v1.2.2/v1.2.3 databases remain readable without schema migration. The master
+password, PBKDF2 parameters, vault key, `vault.salt` and `vault.verify` remain unchanged
+in this release. There is no automatic credential deletion or re-encryption.
+**Host-key pinning remains a separate protection layer**; the truststore is not migrated.
+V2 binds the stored host identity, not DNS results or external SSH configuration changes.
+Whole-database rollbacks and vault clones are not detected. Older application versions
+cannot read V2; downgrading requires a matching backup made before the first V2 write.
 Incomplete vaults are not silently re-created.
 
 On POSIX, the data directory is restricted to `0700` and known application files to
@@ -136,9 +163,8 @@ files cause an error rather than automatic ownership changes. Existing symlink-b
 storage needs a deliberate move to a regular data directory; the application does
 not move data. This does not implement Windows ACL hardening.
 
-Cryptographic credential binding, a memory-hard KDF with versioned migration,
-general credential deletion, further log hardening and automatic vault locking are
-reserved for a later release.
+A memory-hard KDF with versioned migration, further log hardening and automatic
+vault locking are reserved for a later release.
 
 The release uses Python **3.11.x** (`release-python.txt`; tested with 3.11.16), AsyncSSH **2.24.0 with a pinned upstream transport fix**,
 Cryptography **50.0.1**, PyQt6 **6.11.0** with Qt **6.11.2**, and PyInstaller **6.22.3**. Runtime and transitive dependencies
@@ -150,7 +176,8 @@ The AsyncSSH update includes key-exchange hardening and proxy/configuration fixe
 not merely warning suppression ([changelog](https://asyncssh.readthedocs.io/en/latest/changes.html)).
 Cryptography aligns the previously different local/release versions; 50.0.1 wheels
 include OpenSSL 4.0.2 ([changelog](https://cryptography.io/en/latest/changelog/)).
-The legacy-vault regression test verifies unchanged Fernet/PBKDF2 compatibility.
+Regression tests verify unchanged Fernet/PBKDF2 compatibility, mixed V1/V2 vaults,
+host binding, explicit confirmation and consistent connection snapshots.
 
 External known_hosts files cannot grant application trust, including for ProxyJump.
 Only raw public host-key algorithms are offered, respecting HostKeyAlgorithms restrictions;

@@ -137,8 +137,35 @@ Bei Änderung von Host/IP, Benutzer oder Port muss ein gespeichertes Passwort er
 eingegeben oder ausdrücklich gelöscht werden. Beim Wechsel von Passwort auf Key
 kann es bei unverändertem Ziel bewusst verschlüsselt behalten werden.
 
-Vault-Format, PBKDF2-Parameter, Master-Passwort und Datenbankschema bleiben unverändert.
-Es gibt keine automatische Credential-Löschung oder Neuverschlüsselung beim Update.
+Neu eingegebene SSH-Passwörter verwenden **Credential V2**: Ein Fernet-verschlüsselter,
+authentifizierter Inhalt bindet das Passwort an die stabile `hosts.id`, die gespeicherte
+Host-/Aliaszeichenfolge, den Benutzer und den Port. Anzeigename, Tags und Prüfergebnisse
+gehören nicht zur Bindung. Es findet keine DNS-Normalisierung statt.
+
+Bestehende Passwörter im Legacy-/V1-Format bleiben unverändert erhalten. Vor der nächsten
+Passwortanmeldung erscheint für jeden betroffenen Host eine einmalige Bestätigung mit
+Name, Ziel, Benutzer und Port sowie **leerem Passwortfeld**. Erst die bewusste erneute
+Eingabe und „Als V2 speichern“ erzeugen V2. Abbrechen erhält den alten Token und verhindert
+den Start der Aktion. Bereits einzeln bestätigte Hosts bleiben bestätigt. Alternativ kann
+das Passwort in der Hostkonfiguration erneut eingegeben werden. Das alte Klartextpasswort
+wird weder angezeigt noch vorbelegt; es gibt keine automatische Umverpackung.
+**Key-Hosts sind davon nicht betroffen**, auch wenn ein altes Passwort aufbewahrt wird.
+
+Unmittelbar vor jeder SSH-Verbindung wird ein unveränderlicher Kontext aus einer DB-Zeile
+gebildet. Er enthält Ziel, Benutzer, Port, Authentifizierungsmethode, Schlüsselpfad und
+Credential. Hat sich dieser Stand gegenüber dem Worker geändert, wird die Aktion abgewiesen.
+V2 wird gegen genau diesen Kontext geprüft. Unbekannte Versionen, beschädigte Inhalte und
+abweichende Bindungen führen zum Abbruch ohne Legacy-Fallback. Beim Entsperren werden V1
+auf kryptografische Lesbarkeit und V2 zusätzlich auf Struktur und Hostbindung geprüft.
+
+Datenbanken aus v1.2.2/v1.2.3 bleiben ohne Schema-Migration lesbar. Master-Passwort,
+PBKDF2-Parameter, Vault-Schlüssel sowie `vault.salt` und `vault.verify` bleiben in diesem
+Release unverändert. Es gibt keine automatische Credential-Löschung oder Neuverschlüsselung.
+**Host-Key-Pinning bleibt eine getrennte Schutzschicht**; der Truststore wird nicht migriert.
+V2 bindet an den gespeicherten Host, nicht an DNS-Ergebnisse oder externe Änderungen der
+SSH-Konfiguration. Vollständige Datenbank-Rollbacks oder Vault-Kopien werden nicht erkannt.
+Alte Programmversionen verstehen V2 nicht; ein Rückwechsel benötigt eine zusammengehörige
+Sicherung vor dem ersten V2-Schreibvorgang.
 Unvollständige Vaults werden nicht stillschweigend neu angelegt.
 Unter POSIX werden `~/.sshupdater` auf `0700` und bekannte Anwendungsdateien auf `0600`
 begrenzt, auch bei bestehenden Installationen. Fremde Eigentümer, Symlinks und
@@ -147,8 +174,7 @@ Verwendete Symlinks müssen vor dem Update bewusst durch ein reguläres Datenver
 ersetzt werden; die Anwendung verschiebt keine Daten. Die POSIX-Prüfung ist keine
 Windows-ACL-Härtung.
 
-Die kryptografische Bindung von Credentials an Verbindungsdaten, eine speicherharte
-KDF samt versionierter Migration, allgemeine Credential-Löschung, weitergehende Log-Härtung
+Eine speicherharte KDF samt versionierter Migration, weitergehende Log-Härtung
 und automatische Vault-Sperre bleiben einem späteren Release vorbehalten.
 
 ### Tests
@@ -168,7 +194,8 @@ Proxy-/Konfigurationskorrekturen aktualisiert, nicht allein wegen Warnungen
 Cryptography 50.0.1 vereinheitlicht die zuvor abweichenden lokalen und Release-Versionen;
 seine Wheels enthalten OpenSSL 4.0.2
 ([Änderungsprotokoll](https://cryptography.io/en/latest/changelog/)).
-Fernet-Format und PBKDF2 bleiben unverändert; der Legacy-Vault-Test prüft dies.
+Fernet-Verschlüsselung und PBKDF2 bleiben unverändert; Regressionstests prüfen alte Vaults,
+gemischte V1-/V2-Bestände, Hostbindung, bewusste Bestätigung und konsistente Verbindungskontexte.
 
 Externe `known_hosts`-Dateien vergeben kein Vertrauen innerhalb der Anwendung,
 auch nicht für ProxyJump. Host-Zertifikate/CA-Vertrauen werden nicht unterstützt;

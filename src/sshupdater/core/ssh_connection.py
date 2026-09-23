@@ -5,7 +5,7 @@ import asyncio
 import asyncssh
 from asyncssh.connection import _select_host_key_algs
 from asyncssh.public_key import get_default_public_key_algs
-from . import db, host_keys
+from . import db, host_keys, crypto, credentials
 
 
 CONNECT_TIMEOUT = 20
@@ -17,7 +17,8 @@ def auth_params(host):
     params = dict(agent_forwarding=False, host_based_auth=False,
                   gss_auth=False, gss_kex=False, gss_delegate_creds=False)
     if method == 'password':
-        password = db.get_host_password(host['id'])
+        token = host.get('password_enc')
+        password = crypto.decrypt_host_password(token, host) if token is not None else None
         if not password:
             raise OSError("Kein SSH-Passwort gespeichert. Bitte in der Konfiguration eingeben.")
         params.update(password=password, client_keys=None, client_certs=[],
@@ -48,10 +49,14 @@ def options_for(host, *, inspect=False, jump=False, config=()):
                   known_hosts=asyncssh.import_known_hosts(''),
                   x509_trusted_certs=None, x509_trusted_cert_paths=[],
                   client_host_keysign=False, client_host_keys=None)
+    if jump:
+        # ProxyJump identities belong to SSH config, not to managed DB rows.
+        address, user, port = host['primary_ip'], host.get('user', ()), host.get('port', ())
+    else:
+        address, user, port = credentials.normalize_target(host)
     options = asyncssh.SSHClientConnectionOptions(
-        config=config, host=host['primary_ip'],
-        port=host.get('port', ()) if jump else int(host.get('port') or 22),
-        username=host.get('user', ()) if jump else host.get('user') or 'root',
+        config=config, host=address,
+        port=port, username=user,
         **params)
     # Resolve OpenSSH algorithm modifiers before removing unsupported host
     # certificates. This does not alter client identities/CertificateFile.
@@ -114,6 +119,7 @@ async def _open(options, requested, *, inspect=False, chain=(), tunnel=None):
 
 @asynccontextmanager
 async def connect_host(host):
+    host = db.get_connection_context(host)
     try:
         options = options_for(host)
     except ValueError as exc:

@@ -522,6 +522,21 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setWindowTitle(f"SSH Updater v{__version__}")
         self.statusBar().showMessage("Bereit")
 
+    def _prepare_passwords(self, host_ids):
+        from .ui_config import confirm_legacy_passwords
+        from .core import db
+        try:
+            if confirm_legacy_passwords(self, host_ids):
+                return True
+        except (OSError, ValueError, db.sqlite3.Error) as exc:
+            PlainMessageBox.warning(self, 'SSH-Passwort nicht verfügbar', str(exc))
+        for action in (self.act_check, self.act_sim, self.act_upg,
+                       self.act_clean, self.act_reboot, self.act_config):
+            action.setEnabled(True)
+        self.act_stop.setEnabled(False)
+        self.log.append('Aktion abgebrochen; bestehende Passwörter wurden nicht automatisch geändert.')
+        return False
+
     def _get_selected_host_ids(self) -> list:
         model = self.table.model()
         ids = []
@@ -630,6 +645,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.clear()
         self.log.append("Starte Prüfungen...\n")
 
+        if not self._prepare_passwords(selected):
+            return
         self.worker = _CheckWorker(selected)
         self.worker.one_result.connect(self._on_check_result)
         self.worker.finished_all.connect(self._on_check_done)
@@ -726,6 +743,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.clear()
         self.log.append("Starte Simulationen...\n")
 
+        if not self._prepare_passwords(selected):
+            return
         self.sim_worker = _SimWorker(selected)
         self.sim_worker.one_result.connect(self._on_sim_result)
         self.sim_worker.finished_all.connect(self._on_sim_done)
@@ -831,6 +850,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.clear()
         self.log.append("Starte Upgrades...\n")
 
+        if not self._prepare_passwords(selected):
+            return
         self.upg_worker = _UpgradeWorker(selected)
         self.upg_worker.progress.connect(self._on_upgrade_progress)
         self.upg_worker.host_started.connect(self._on_upgrade_host_started)
@@ -915,6 +936,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.clear()
         self.log.append("Starte Autoremove-Simulation...\n")
 
+        if not self._prepare_passwords(selected):
+            return
         self.clean_sim_worker = _CleanSimWorker(selected)
         self.clean_sim_worker.one_result.connect(self._on_clean_sim_result)
         self.clean_sim_worker.finished_all.connect(self._on_clean_sim_done)
@@ -1011,6 +1034,8 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         self.log.append("\nStarte Autoremove...\n")
+        if not self._prepare_passwords(sel):
+            return
         self.clean_run_worker = _CleanRunWorker(sel)
         self.clean_run_worker.progress.connect(self._on_clean_progress)
         self.clean_run_worker.host_started.connect(self._on_clean_host_started)
@@ -1092,6 +1117,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.clear()
         self.log.append("Starte Reboot...\n")
 
+        if not self._prepare_passwords(selected):
+            return
         self.reboot_worker = _RebootWorker(selected)
         self.reboot_worker.host_done.connect(self._on_reboot_host_done)
         self.reboot_worker.finished_all.connect(self._on_reboot_done)
@@ -1288,13 +1315,13 @@ class _CheckWorker(_CancellableWorker):
                 for h in hosts:
                     if self.stop_requested:
                         break
-                    if not h.get("primary_ip") or not h.get("user"):
+                    if not h.get("primary_ip"):
                         self.one_result.emit(
                             {
                                 "host_id": h["id"],
                                 "name": h.get("name", "?"),
                                 "status": "error",
-                                "note": "IP/User fehlt",
+                                "note": "IP/Host fehlt",
                             }
                         )
                         continue
@@ -1333,13 +1360,13 @@ class _SimWorker(_CancellableWorker):
                 for h in hosts:
                     if self.stop_requested:
                         break
-                    if not h.get("primary_ip") or not h.get("user"):
+                    if not h.get("primary_ip"):
                         self.one_result.emit(
                             {
                                 "host_id": h["id"],
                                 "name": h.get("name", "?"),
                                 "status": "error",
-                                "note": "IP/User fehlt",
+                                "note": "IP/Host fehlt",
                             }
                         )
                         continue
@@ -1449,13 +1476,13 @@ class _UpgradeWorker(_ActionWorker):
                     name = h.get("name", "?")
                     self.host_started.emit({"host_id": h["id"], "name": name})
 
-                    if not h.get("primary_ip") or not h.get("user"):
+                    if not h.get("primary_ip"):
                         self.host_done.emit(
                             {
                                 "host_id": h["id"],
                                 "name": name,
                                 "status": "error",
-                                "note": "IP/User fehlt",
+                                "note": "IP/Host fehlt",
                             }
                         )
                         continue

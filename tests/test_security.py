@@ -11,7 +11,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
 import asyncssh
 from cryptography.fernet import Fernet
-from sshupdater.core import crypto, db, host_keys, settings, ssh_connection, storage
+from sshupdater.core import crypto, db, host_keys, settings, ssh_connection, storage, credentials
 
 
 
@@ -96,7 +96,9 @@ class PrivateStorageTests(unittest.TestCase):
             with closing(db._connect()) as con, con:
                 con.execute('UPDATE hosts SET password_enc=? WHERE id=?', (token, hid))
             db.init_db()
-            self.assertEqual(db.get_host_password(hid), 'old ssh password')
+            with self.assertRaises(credentials.LegacyCredentialRequired):
+                db.get_host_password(hid)
+            crypto.set_master_password('test master')
             self.assertEqual(db.get_host(hid)['password_enc'], token)
             self.assertEqual((self.root / 'vault.salt').read_bytes(), salt)
             self.assertEqual((self.root / 'vault.verify').read_bytes(), verifier)
@@ -215,13 +217,17 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         patch = mock.patch.object(ssh_connection, 'options_for',
                                   side_effect=lambda host, **kw: original(host, config=[self.config], **kw))
         patch.start(); self.addCleanup(patch.stop)
-        patch = mock.patch.object(db, 'get_host_password', return_value='secret')
+        # These tests isolate transport policy. Real DB snapshot/codec integration
+        # is exercised in test_credentials_v2, including refusal before any socket.
+        patch = mock.patch.object(db, 'get_connection_context', side_effect=lambda host: host)
+        patch.start(); self.addCleanup(patch.stop)
+        patch = mock.patch.object(crypto, 'decrypt_host_password', return_value='secret')
         patch.start(); self.addCleanup(patch.stop)
         self.key = asyncssh.generate_private_key('ssh-ed25519')
         self.auth = []
         self.commands = []
         self.servers = []
-        self.host = dict(id=1, name='test', primary_ip='127.0.0.1', user='user', auth_method='password')
+        self.host = dict(id=1, password_enc=b'synthetic-transport-fixture', name='test', primary_ip='127.0.0.1', user='user', auth_method='password')
         self.host['port'] = await self.start_server(self.key)
 
     async def asyncTearDown(self):

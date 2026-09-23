@@ -9,7 +9,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 # Speicherort des Salts (~/.sshupdater/vault.salt)
 from .settings import DATA_DIR
-from . import storage
+from . import storage, credentials
 
 _SALT_PATH = DATA_DIR / "vault.salt"
 _FERNET: Optional[Fernet] = None
@@ -55,28 +55,33 @@ def keystore_exists() -> bool:
     return salt_exists
 
 
-def _encrypted_tokens() -> list[bytes]:
+def _encrypted_records():
     # Also protect encrypted Proxmox configuration. Never create/migrate the DB
     # while deciding whether this is a fresh installation; include live WAL data.
     config = DATA_DIR / 'config.enc'
-    tokens = [storage.read_private(config)] if config.exists() else []
+    tokens = [(None, storage.read_private(config))] if config.exists() else []
     path = DATA_DIR / 'app.db'
     if not path.exists():
         return tokens
     try:
         con = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)
+        con.row_factory = sqlite3.Row
         try:
             tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             if not tables:
                 return tokens
-            tokens.extend(row[0] for row in con.execute(
-                'SELECT password_enc FROM hosts WHERE password_enc IS NOT NULL'))
+            tokens.extend((dict(row), row['password_enc']) for row in con.execute(
+                'SELECT * FROM hosts WHERE password_enc IS NOT NULL'))
             return tokens
         finally:
             con.close()
     except sqlite3.Error as exc:
         raise OSError('Vault-Zustand nicht prüfbar: Datenbank beschädigt oder nicht lesbar. '
                       'Es wird kein neuer Schlüssel erzeugt.') from exc
+
+def _encrypted_tokens():
+    return [token for _, token in _encrypted_records()]
+
 
 def set_master_password(password: str) -> None:
     """Leitet den Schlüssel ab, verifiziert (oder erzeugt) den Keystore und entsperrt das Vault."""
@@ -98,11 +103,14 @@ def set_master_password(password: str) -> None:
             # theoretisch „fremde“/veraltete Datei
             raise WrongPassword("Keystore-Verifikation fehlgeschlagen.")
         try:
-            for encrypted in _encrypted_tokens():
-                f.decrypt(encrypted)
-        except (InvalidToken, TypeError) as e:
+            for host, encrypted in _encrypted_records():
+                if host is None:
+                    f.decrypt(encrypted)
+                else:
+                    credentials.decrypt(f, encrypted, host, validate_legacy=True)
+        except (InvalidToken, TypeError, credentials.CredentialError):
             raise OSError('Vault inkonsistent: Gespeicherte Zugangsdaten passen nicht zum Schlüssel '
-                          'oder sind beschädigt. Bitte zusammengehörige Sicherung wiederherstellen.') from e
+                          'oder sind beschädigt. Bitte zusammengehörige Sicherung wiederherstellen.') from None
         _FERNET = f
         return
 
@@ -127,3 +135,15 @@ def decrypt_str(token: bytes) -> str:
         return _FERNET.decrypt(token).decode("utf-8")
     except InvalidToken as e:
         raise ValueError("Entschlüsselung fehlgeschlagen (falsches Masterpasswort?).") from e
+
+
+def encrypt_host_password(secret, host):
+    if not is_unlocked():
+        raise credentials.CredentialError('Vault ist gesperrt.')
+    return credentials.encrypt(_FERNET, secret, host)
+
+
+def decrypt_host_password(token, host):
+    if not is_unlocked():
+        raise credentials.CredentialError('Vault ist gesperrt.')
+    return credentials.decrypt(_FERNET, token, host)

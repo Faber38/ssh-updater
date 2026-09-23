@@ -16,8 +16,73 @@ from PyQt6.QtWidgets import (
     QWidget,
     QLabel,
 )
-from .core import db, settings, storage
+from .core import db, settings, storage, credentials
 from .ui_text import PlainMessageBox as QMessageBox
+
+
+class LegacyPasswordDialog(QDialog):
+    """Explicit re-entry bound to the row the user actually reviewed."""
+    def __init__(self, parent, host):
+        super().__init__(parent)
+        self.host = dict(host)
+        self.setWindowTitle('SSH-Passwort erneut bestätigen')
+        layout = QVBoxLayout(self)
+        explanation = QLabel('Für diesen Host ist ein Passwort im älteren Speicherformat vorhanden.\n'
+                             'Aus Sicherheitsgründen muss es einmal neu bestätigt werden.')
+        explanation.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        layout.addWidget(explanation)
+        form = QFormLayout()
+        context = db.connection_context(host)
+        for label, value in [('Name', host.get('name', '')), ('Ziel', context['primary_ip']),
+                             ('Benutzer', context['user']), ('Port', str(context['port']))]:
+            field = QLabel(value)
+            field.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+            form.addRow(label, field)
+        self.password = QLineEdit()
+        self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        form.addRow('Passwort erneut eingeben', self.password)
+        layout.addLayout(form)
+        buttons = QHBoxLayout()
+        save = QPushButton('Als V2 speichern')
+        save.setEnabled(False)
+        save.setAutoDefault(False)
+        self.password.textChanged.connect(lambda value: save.setEnabled(bool(value)))
+        save.clicked.connect(self._save)
+        cancel = QPushButton('Abbrechen')
+        cancel.setDefault(True)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(save)
+        buttons.addWidget(cancel)
+        layout.addLayout(buttons)
+
+    def _save(self):
+        if not self.password.text():
+            return
+        try:
+            db.set_host_password(self.host['id'], self.password.text(), expected=self.host)
+        except (OSError, ValueError, db.HostNotFoundError, db.sqlite3.Error) as exc:
+            QMessageBox.warning(self, 'Passwort nicht gespeichert', str(exc))
+            return
+        self.password.clear()
+        self.accept()
+
+    def reject(self):
+        self.password.clear()
+        super().reject()
+
+
+def confirm_legacy_passwords(parent, host_ids):
+    for host_id in host_ids:
+        host = db.get_host(host_id)
+        if host is None:
+            raise db.HostConfigurationChanged()
+        if host.get('auth_method') != 'password' or host.get('password_enc') is None:
+            continue
+        if credentials.version(host['password_enc']) == 1:
+            dialog = LegacyPasswordDialog(parent, host)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return False
+    return True
 
 
 class HostEditDialog(QDialog):
@@ -64,6 +129,13 @@ class HostEditDialog(QDialog):
             form.rowCount() - 1, QFormLayout.ItemRole.FieldRole
         ).widget().setLayout(key_row)
         form.addRow("Passwort", self.in_pwd)
+        if self._host.get('password_enc') is not None:
+            try:
+                legacy = credentials.version(self._host['password_enc']) == 1
+            except credentials.CredentialError:
+                legacy = False
+            if legacy:
+                form.addRow(QLabel('Legacy-Passwort: vor Passwortanmeldung einmal erneut eingeben.'))
         lay.addLayout(form)
 
         hint = QLabel("SSH-Key: gewählte Datei, sonst SSH-Konfiguration / Standard-Keys / lokaler Agent.\nAgent- und X11-Forwarding sind immer deaktiviert.")
@@ -224,7 +296,14 @@ class ConfigDialog(QDialog):
             self.table.setItem(r, 1, QTableWidgetItem(h.get("primary_ip") or ""))
             self.table.setItem(r, 2, QTableWidgetItem(str(h.get("port") or 22)))
             self.table.setItem(r, 3, QTableWidgetItem(h.get("user") or ""))
-            self.table.setItem(r, 4, QTableWidgetItem(h.get("auth_method") or ""))
+            auth = h.get("auth_method") or ""
+            if h.get('password_enc') is not None:
+                try:
+                    if credentials.version(h['password_enc']) == 1:
+                        auth += ' (Legacy-Passwort)'
+                except credentials.CredentialError:
+                    auth += ' (Credential ungültig)'
+            self.table.setItem(r, 4, QTableWidgetItem(auth))
             self.table.setItem(r, 5, QTableWidgetItem(h.get("key_path") or ""))
 
             # host-id in row speichern

@@ -96,7 +96,8 @@ class PlaintextUITests(unittest.TestCase):
         window._on_clean_sim_result({'host_id': 1, 'name': 'ok', 'status': 'ok'})
         window._on_clean_sim_result({'host_id': 2, 'name': 'failed', 'status': 'error'})
         with mock.patch.object(PlainMessageBox, 'question', return_value=PlainMessageBox.StandardButton.Yes), \
-                mock.patch.object(ui_main._CleanRunWorker, 'start') as start:
+                mock.patch.object(ui_main._CleanRunWorker, 'start') as start, \
+                mock.patch.object(db, 'get_host', return_value=dict(id=1, auth_method='key')):
             window._on_clean_sim_done()
         start.assert_called_once()
         self.assertEqual(window.clean_run_worker.host_ids, [1])
