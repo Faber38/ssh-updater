@@ -10,7 +10,7 @@ overview, package checks and system updates, SSH host-key verification,
 Docker/Compose support, and local offline help. SSH-accessible VMs and containers
 can also be managed as hosts.
 
-Stable release: **v1.2.4** · Current development version: **v1.2.5-beta2**
+Stable release: **v1.2.4** · Current development version: **v1.2.5-beta3**
 [Deutsche README](README.md)
 
 ## Features

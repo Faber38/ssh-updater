@@ -152,6 +152,41 @@ class ThemeTests(unittest.TestCase):
         self.assertNotIn('🐳',path.read_text(encoding="utf-8"))
         self.assertIn('Eigenes SSH-Updater-Container-Symbol; keine Docker-Marke',path.with_name('README.md').read_text(encoding="utf-8"))
 
+    def assert_container_membership(self, w, toolbar):
+        expected=(w.act_docker_mark,w.act_docker_preview,w.act_docker_update)
+        self.assertEqual(toolbar.container_actions,expected)
+        actions=toolbar.actions()
+        start=actions.index(w.act_docker_mark)
+        self.assertEqual(tuple(actions[start:start+3]),expected)
+        self.assertEqual(actions[start-1],w.act_toggle_checks)
+        for action in (w.act_stop,w.act_help):
+            self.assertNotIn(action,toolbar.container_actions)
+            self.assertGreater(actions.index(action),start+2)
+        self.assertLess(actions.index(w.act_stop),actions.index(w.act_help))
+
+    def toolbar_rect(self, toolbar, widget):
+        return QtCore.QRect(widget.mapTo(toolbar,QtCore.QPoint()),widget.size())
+
+    def toolbar_diagnostic(self, toolbar, action, theme, label):
+        widget=toolbar.widgetForAction(action)
+        parent=widget.parentWidget()
+        return dict(action=action.text(), object_name=widget.objectName(),
+                    widget_type=widget.metaObject().className(), theme=theme, label=label,
+                    visible=widget.isVisible(),
+                    parent=(parent.metaObject().className(),parent.objectName()),
+                    widget_rect=widget.geometry().getRect(),
+                    toolbar_rect=self.toolbar_rect(toolbar,widget).getRect(),
+                    group_rect=toolbar.container_group_rect().getRect(),
+                    toolbar_geometry=toolbar.geometry().getRect())
+
+    def fit_toolbar(self, w, toolbar):
+        toolbar.ensurePolished()
+        toolbar.layout().activate()
+        # Include window space outside the toolbar; no platform-specific width.
+        needed=max(toolbar.sizeHint().width(),toolbar.layout().sizeHint().width())
+        w.resize(max(w.minimumSizeHint().width(),needed+w.width()-toolbar.width()),w.height())
+        self.app.processEvents()
+
     def test_container_group_painting_and_dynamic_labels_follow_theme(self):
         w=self.start_saved('colour')
         toolbar=w.findChild(ui_resources.ContainerToolBar)
@@ -167,11 +202,19 @@ class ThemeTests(unittest.TestCase):
             for label in ('Docker-Update','Docker anwenden','Docker prüfen'):
                 w.act_docker_update.setText(label)
                 self.app.processEvents()
+                self.assert_container_membership(w,toolbar)
+                self.fit_toolbar(w,toolbar)
                 group=toolbar.container_group_rect()
-                for action in (w.act_docker_mark,w.act_docker_preview,w.act_docker_update):
-                    self.assertTrue(group.contains(toolbar.widgetForAction(action).geometry()))
-                for action in (w.act_toggle_checks,w.act_stop):
-                    self.assertFalse(group.intersects(toolbar.widgetForAction(action).geometry()))
+                for action in toolbar.container_actions:
+                    widget=toolbar.widgetForAction(action)
+                    diagnostic=self.toolbar_diagnostic(toolbar,action,theme,label)
+                    self.assertTrue(widget.isVisible(),diagnostic)
+                    self.assertTrue(group.contains(self.toolbar_rect(toolbar,widget)),diagnostic)
+                for action in (w.act_toggle_checks,w.act_stop,w.act_help):
+                    widget=toolbar.widgetForAction(action)
+                    diagnostic=self.toolbar_diagnostic(toolbar,action,theme,label)
+                    self.assertTrue(widget.isVisible(),diagnostic)
+                    self.assertFalse(group.intersects(self.toolbar_rect(toolbar,widget)),diagnostic)
                 self.assertLess(mark.x(),toolbar.widgetForAction(w.act_docker_preview).x())
                 painted=toolbar.grab().toImage()
                 actions=toolbar.container_actions
@@ -186,9 +229,50 @@ class ThemeTests(unittest.TestCase):
                 delta=max(abs(a-b) for a,b in zip(tinted.getRgb()[:3],base.getRgb()[:3]))
                 self.assertGreater(delta,0,(theme,label,tinted.name(),base.name()))
                 self.assertLessEqual(delta,20)
-                for action in (w.act_toggle_checks,w.act_stop):
-                    point=toolbar.widgetForAction(action).geometry().center()
+                for action in (w.act_toggle_checks,w.act_stop,w.act_help):
+                    point=self.toolbar_rect(toolbar,toolbar.widgetForAction(action)).center()
                     self.assertEqual(painted.pixelColor(round(point.x()*scale),round(point.y()*scale)),
                                      plain.pixelColor(round(point.x()*scale),round(point.y()*scale)))
             seen.append(tinted.name())
         self.assertEqual(len(set(seen)),3)
+
+
+    def test_container_membership_survives_toolbar_overflow(self):
+        w=self.start_saved('colour')
+        toolbar=w.findChild(ui_resources.ContainerToolBar)
+        for theme in ('colour','light','dark'):
+            ui_theme.apply_theme(self.app,theme)
+            for label in ('Docker-Update','Docker anwenden','Docker prüfen'):
+                with self.subTest(theme=theme,label=label):
+                    w.act_docker_update.setText(label)
+                    self.app.processEvents()
+                    self.fit_toolbar(w,toolbar)
+                    update=toolbar.widgetForAction(w.act_docker_update)
+                    self.assertTrue(update.isVisible(),
+                                    self.toolbar_diagnostic(toolbar,w.act_docker_update,theme,label))
+                    # Cut through the last group button, then exercise full overflow.
+                    narrow=self.toolbar_rect(toolbar,update).center().x()+w.width()-toolbar.width()
+                    for width in (narrow,w.minimumSizeHint().width()):
+                        w.resize(width,w.height())
+                        self.app.processEvents()
+                        self.assert_container_membership(w,toolbar)
+                        group=toolbar.container_group_rect()
+                        visible=[]
+                        hidden=[]
+                        for action in toolbar.container_actions:
+                            widget=toolbar.widgetForAction(action)
+                            diagnostic=self.toolbar_diagnostic(toolbar,action,theme,label)
+                            if widget.isVisible():
+                                visible.append(action)
+                                self.assertTrue(group.contains(self.toolbar_rect(toolbar,widget)),diagnostic)
+                            else:
+                                hidden.append(action)
+                        self.assertTrue(hidden,[self.toolbar_diagnostic(toolbar,a,theme,label)
+                                                for a in toolbar.container_actions])
+                        if not visible:
+                            self.assertTrue(group.isNull())
+                        for action in (w.act_toggle_checks,w.act_stop,w.act_help):
+                            widget=toolbar.widgetForAction(action)
+                            if widget.isVisible():
+                                self.assertFalse(group.intersects(self.toolbar_rect(toolbar,widget)),
+                                                 self.toolbar_diagnostic(toolbar,action,theme,label))
