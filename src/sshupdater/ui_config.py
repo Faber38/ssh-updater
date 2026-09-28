@@ -1,5 +1,4 @@
 from __future__ import annotations
-from pathlib import Path
 from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtWidgets import (
     QDialog,
@@ -250,11 +249,8 @@ class ConfigDialog(QDialog):
         self.cmb_theme = QComboBox()
         self.cmb_theme.addItems(["Hell", "Dunkel", "Standard", "Colour"])
 
-        # aktuellen Wert aus QSettings (Fallback: settings.THEME)
-        qs = QtCore.QSettings("Faber38", "SSH Updater")
-        cur = (
-            qs.value("ui/theme", getattr(settings, "THEME", "standard")) or "standard"
-        ).lower()
+        from .ui_theme import saved_theme
+        cur = saved_theme()
         index_map = {"light": 0, "dark": 1, "standard": 2, "colour": 3}
         self.cmb_theme.setCurrentIndex(index_map.get(cur, 2))
 
@@ -397,7 +393,6 @@ class ConfigDialog(QDialog):
 
     def _apply_theme_choice(self):
         """Auswahl aus self.cmb_theme anwenden und persistent speichern."""
-        import sys  # lokal, um keinen globalen Import zu ändern
         from PyQt6 import QtWidgets
 
         # Index -> Theme-String
@@ -413,47 +408,5 @@ class ConfigDialog(QDialog):
         except Exception:
             pass
 
-        # QSS-Pfad bestimmen (Onefile kompatibel)
-        def qss_path(name: str) -> Path:
-            base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-            # dev:  .../sshupdater/ (ui_config.py liegt in diesem Ordner)
-            # prod: _MEIPASS enthält 'assets/qss'
-            dev_path = (
-                Path(__file__).resolve().parent / "assets" / "qss" / f"{name}.qss"
-            )
-            bundled = base / "assets" / "qss" / f"{name}.qss"
-            return bundled if bundled.exists() else dev_path
-
-        app = QtWidgets.QApplication.instance()
-        app.setStyleSheet("")  # altes Stylesheet vollständig entfernen
-        if theme in ("light", "dark", "colour"):
-            qss = qss_path(theme)
-            if qss.exists():
-               app.setStyleSheet(qss.read_text(encoding="utf-8"))
-
-               # Hauptfenster live aktualisieren
-               par = self.parent()
-               if par and hasattr(par, "_apply_theme"):
-                    try:
-                       par._apply_theme()
-                    except Exception:
-                        pass
-            return
-
-
-        # Standard oder QSS nicht gefunden -> neutrales helles Fallback
-        app.setStyleSheet(
-            """
-            QWidget { background-color: #f0f0f0; color: #000; font-family: DejaVu Sans, Arial; font-size: 10pt; }
-            QPushButton { background-color: #e0e0e0; border: 1px solid #a0a0a0; padding: 4px 8px; }
-            QPushButton:hover { background-color: #f8f8f8; }
-        """
-        )
-
-        # Hauptfenster live aktualisieren (falls Dialog mit Parent geöffnet)
-        par = self.parent()
-        if par and hasattr(par, "_apply_theme"):
-            try:
-                par._apply_theme()
-            except Exception:
-                pass
+        from .ui_theme import apply_theme
+        apply_theme(QtWidgets.QApplication.instance(), theme)

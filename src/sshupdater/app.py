@@ -1,17 +1,12 @@
 import sys
-from pathlib import Path
 from PyQt6 import QtWidgets
 from PyQt6.QtWidgets import QInputDialog, QLineEdit
 
 from sshupdater.ui_main import MainWindow
 from sshupdater.ui_text import PlainMessageBox as QMessageBox
 from sshupdater.core import db, crypto, settings
-
-
-# NEU: robustes Ressourcen-Root (funktioniert auch im PyInstaller-Onefile)
-def resource_path(*parts):
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base.joinpath(*parts)
+from sshupdater.ui_resources import resource_path
+from sshupdater.ui_theme import apply_theme
 
 
 def main():
@@ -25,17 +20,7 @@ def main():
         QMessageBox.critical(None, "Datenspeicher nicht sicher zugänglich", str(e))
         return 1
 
-    # Theme laden nach Einstellung
-    qss = None
-    if settings.THEME == "dark":
-        qss = resource_path("assets", "qss", "dark.qss")
-    elif settings.THEME == "light":
-        qss = resource_path("assets", "qss", "light.qss")
-    elif settings.THEME == "colour":
-        qss = resource_path("assets", "qss", "colour.qss")
-
-    if qss and qss.exists():
-        app.setStyleSheet(qss.read_text(encoding="utf-8"))
+    apply_theme(app)
 
     # --- Masterpasswort-Handling ------------------------------------------------
 

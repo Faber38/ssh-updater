@@ -16,7 +16,7 @@ QMainWindow, QDialog {
 }
 
 /* Tabellen */
-QTableView {
+QTableView, QTreeView#dockerHostTable {
     background-color: #ffffff;
     alternate-background-color: #f6f8fa;
     gridline-color: #dddddd;
@@ -123,10 +123,10 @@ QScrollBar::handle:vertical:hover {
 /* --- Effekte: sanftes Hover / Focus ---------------------------------- */
 
 /* Tabellen: Zeilen-Hover und klarere Auswahl */
-QTableView::item:hover {
+QTableView::item:hover, QTreeView#dockerHostTable::item:hover {
     background-color: #eaf3ff;    /* leichtes Blau beim Überfahren */
 }
-QTableView::item:selected {
+QTableView::item:selected, QTreeView#dockerHostTable::item:selected {
     background-color: #cfe5ff;    /* etwas kräftiger bei Auswahl */
     color: #000;
 }
@@ -157,3 +157,6 @@ QToolButton:hover {
     background-color: #e9f2ff;
     border-radius: 4px;
 }
+
+/* QTreeView needs explicit grid painting; reuse the table grid colour. */
+QTreeView#dockerHostTable { qproperty-gridColor: #dddddd; }

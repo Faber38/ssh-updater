@@ -4,12 +4,14 @@
 
 # SSH Updater
 
-SSH Updater ist eine grafische Anwendung zum zentralen Verwalten und Aktualisieren
-mehrerer Linux-Systeme über SSH. Dazu gehören auch VMs und Container, etwa auf
-Proxmox, sofern sie per SSH erreichbar sind. Die Qt-Oberfläche zeigt Status,
-verfügbare Updates und die Ausgabe laufender Aktionen an.
+SSH Updater ist ein Desktop-Werkzeug zum Verwalten und Aktualisieren eigener oder
+vertrauenswürdiger Linux-Systeme über SSH innerhalb eines kontrollierten, sicheren
+LANs. Es verbindet eine Mehrhostübersicht, Paketprüfung und Systemupdates,
+SSH-/Host-Key-Prüfung, Docker-/Compose-Unterstützung und lokale Offline-Hilfe.
+Auch per SSH erreichbare VMs und Container können als Hosts verwaltet werden.
 
-Aktuelle Version: **1.2.4** · [English README](README_EN.md)
+Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta**
+[English README](README_EN.md)
 
 ## Features
 
@@ -19,27 +21,40 @@ Aktuelle Version: **1.2.4** · [English README](README_EN.md)
 - Unterstützung für Debian/Ubuntu, Fedora/RHEL und Arch sowie ausgewählte Derivate
 - Hostverwaltung mit Passwort- oder SSH-Key-Authentifizierung
 - Master-Passwort zum Schutz gespeicherter SSH-Passwörter
-- Themes: Hell, Dunkel und Colour
+- Themes: **Hell**, **Dunkel**, **Standard** und **Colour**; das gespeicherte Theme
+  wird beim Start automatisch angewendet
 - Lokale Anwendungsdaten unter `~/.sshupdater/`
+- Docker Engine/Compose erkennen, eingerückte Projektzeilen mit unabhängiger
+  Host-/Projektauswahl und Docker-Detailansicht
+- Read-only-Imageprüfung desselben konfigurierten Registry-Tags, konservative
+  Statusanzeige bei unklarem Vergleich und kontrollierter Updateablauf
+- Registry-Metadaten ausschließlich im RAM zwischenspeichern; Rate-Limits beachten
+- Offline-Hilfe zu Einrichtung, SSH, Systemaktionen, Docker, Sicherheit und Fehlerbehebung
 
-## Screenshots
+## Oberfläche
 
-### Hauptfenster
+Die Hosttabelle ordnet Compose-Projekte ihren Hosts unter. Die Toolbar besitzt
+einen eigenen Container-Bereich und den Eintrag **Hilfe**.
 
-<p align="center">
-  <img src="src/sshupdater/assets/ssh_updater.png" alt="Hostliste mit Status, Update-Zähler und Protokollausgabe" width="800"/>
-</p>
+![SSH Updater mit aufgeklappten Docker-/Compose-Projekten im Colour-Theme.](src/sshupdater/assets/ssh_updater.png)
 
-### Konfiguration
-
-<p align="center">
-  <img src="src/sshupdater/assets/Konfig.png" alt="Dialog zum Hinzufügen und Bearbeiten von Hosts" width="600"/>
-</p>
+*SSH Updater mit aufgeklappten Docker-/Compose-Projekten im Colour-Theme.*
 
 ## Installation / Quickstart
 
-Für den Start aus dem Quellcode werden Python **3.11.x** und eine grafische
-Desktop-Umgebung benötigt. Im Projektverzeichnis unter Linux:
+### Release-Binary
+
+- **Linux x86_64:** `.tar.gz`-Releasearchiv entpacken und `./ssh-updater` starten.
+- **Windows x86_64:** `.zip`-Releasearchiv entpacken und `ssh-updater.exe` starten.
+
+Eine grafische Desktop-Umgebung ist erforderlich. Aus diesen Buildzielen folgt
+keine Garantie für jede Linux-Distribution oder Windows-Version. Die obige
+Entwicklungsversion bedeutet nicht, dass ein Beta-Releasearchiv veröffentlicht ist.
+
+### Quellcode unter Linux
+
+Die Python-Version steht in [release-python.txt](release-python.txt), derzeit
+**3.11.x**. Im Projektverzeichnis:
 
 ```bash
 python3.11 -m venv .venv
@@ -48,11 +63,20 @@ python -m pip install -r requirements.txt
 ./run_dev.sh
 ```
 
+Umgebung und Abhängigkeiten zuerst einrichten: `run_dev.sh` übernimmt beides nicht.
+
 Auf den Zielsystemen müssen SSH und der passende Paketmanager verfügbar sein.
 Administrative Befehle benötigen entsprechende Rechte; für Aufrufe über `sudo`
 muss die Ausführung ohne Passwortabfrage möglich sein. Auf Arch wird für die
 Update-Prüfung `checkupdates` aus `pacman-contrib` benötigt. APT muss die Option
-`--error-on=any` unterstützen; die Reboot-Funktion benötigt `systemd-run`.
+`--error-on=any` unterstützen; Reboot benötigt `systemd-run`.
+
+### Erster Start / Master-Passwort
+
+Beim ersten Start ein Master-Passwort festlegen und bestätigen. Bei späteren
+Starts den lokalen Vault damit entsperren. Dies ist auch bei ausschließlicher
+SSH-Key-Nutzung erforderlich. Das Master-Passwort schützt lokal verschlüsselte
+Zugangsdaten; Einzelheiten stehen in der In-App-Hilfe.
 
 ## Grundlegende Bedienung
 
@@ -63,23 +87,87 @@ Update-Prüfung `checkupdates` aus `pacman-contrib` benötigt. APT muss die Opti
    vergleichen und erst bei Übereinstimmung bestätigen.
 3. Im Hauptfenster die gewünschten Hosts auswählen und mit **Prüfen** nach Updates
    suchen. **Simulieren** zeigt eine Vorschau, ohne Paket-Upgrades auszuführen.
-   Bei DNF ist dies eine Liste verfügbarer Updates, kein vollständiger Transaktionsplan.
+   Bei DNF und Arch ist dies eine Updateübersicht, kein vollständiger Transaktionsplan.
 4. Mit **Upgrade** Updates installieren. **Bereinigen** simuliert auf Debian-basierten
    Systemen zunächst das Entfernen ungenutzter Pakete und verlangt eine Bestätigung.
    **Reboot** plant einen Neustart des Zielsystems.
 5. Ergebnisse und Fehlermeldungen im Protokoll prüfen.
+
+**Prüfen** und **Simulieren** können Paketlisten aktualisieren, installieren dabei
+aber keine Pakete. System-Upgrades können Docker Engine/Compose als Hostpakete
+aktualisieren; Compose-Images und Container verwenden den separaten Ablauf unten.
 
 **Stopp** beendet das lokale Warten und überspringt weitere ausgewählte Hosts.
 Ein bereits gestarteter Remote-Prozess kann weiterlaufen. Auch nach einem Timeout
 oder Verbindungsabbruch kann der Zustand am Ziel unbekannt sein; vor einem erneuten
 Start dort prüfen, ob die Aktion noch läuft oder bereits abgeschlossen ist.
 
+## Docker / Compose
+
+Nach einer Hostprüfung erscheinen erkannte Compose-Projekte eingerückt unter
+ihrem Host. Hostcheckboxen wählen Systemaktionen, Projektcheckboxen Docker-/
+Compose-Aktionen. Keine Auswahl setzt die andere automatisch. Ein Klick auf die
+Docker-Anzeige öffnet Details der letzten Prüfung ohne erneute Remote-Abfrage.
+
+Die Imageprüfung vergleicht das laufende Image mit **demselben konfigurierten
+Tag**: `nginx:1.28-alpine` gegen `nginx:1.28-alpine`, ohne automatisch
+`nginx:1.29-alpine` auszuwählen. Ein unklarer Vergleich ergibt eine unvollständige
+Prüfung statt einer geratenen Aktualitäts- oder Updateaussage.
+
+1. Compose-Projekt auswählen und **Update-Vorschau** öffnen: ein read-only Plan
+   aus der letzten Prüfung, keine Docker-Simulation.
+2. **Docker-Update** führt einen frischen Live-Preflight durch und pullt danach
+   nur freigegebene Update-Services. Der Pull ersetzt noch keine Container.
+3. **Docker anwenden** prüft den vorbereiteten Zustand erneut und erstellt diese
+   Services mit dem geladenen Image neu, ohne erneuten Pull oder Build.
+4. **Docker prüfen** verifiziert lokale Daten und Registry-Stand abschließend
+   read-only. Erst ein eindeutiges Ergebnis schließt die Verifikation ab.
+
+Ein späterer Registryfehler macht einen erfolgreichen Apply nicht rückwirkend
+ungültig. Die Verifikation bleibt ausstehend; ein erneut geänderter Registry-Tag
+kann stattdessen einen neuen Updatekandidaten ergeben. Registry-Metadaten liegen
+nur im Sitzungs-RAM (30 Minuten TTL), lokale Containerdaten werden frisch gelesen.
+Rate-Limit-Backoff wird respektiert; ein Neustart verwirft Cache und vorbereitete
+Updatezustände.
+
+### Voraussetzungen und Grenzen
+
+Docker Engine, Compose und Buildx für Registry-Metadatenprüfungen müssen für den
+SSH-Benutzer nichtinteraktiv verfügbar sein. Compose wird bewusst konservativ
+unterstützt: eine eindeutige statische lokale Datei und geeignete `image:`-
+Referenzen. Overrides, Includes, Profiles und Environment-Interpolation werden
+nicht allgemein unterstützt. Genaue Grenzen stehen in Hilfe und Technikdokumenten.
+Swarm und Kubernetes gehören nicht zum normalen unterstützten Compose-Updatepfad.
+
+Keine automatische Auswahl höherer Tags, Compose-Dateiänderung, Änderung von
+Digest-Pins, lokale Image-Builds, Registry-Logins, `docker compose down`, Image-/
+System-Prune, Löschung alter Images, Rollbacks oder anwendungsspezifische Backups/
+Migrationen. Vorhandene Registry-Zugänge auf dem Zielhost kann Docker selbst
+verwenden; der Metadaten-Cache speichert keine Zugangsdaten.
+
+**Anwendungsvorbereitung bleibt erforderlich:** Ein verfügbares Imageupdate ist
+keine Zusicherung, dass die Anwendung sofort aktualisiert werden darf.
+Zustandsbehaftete Dienste können Backups, Snapshots, Migrationen, die Prüfung der
+Release Notes und eine vorgeschriebene Upgrade-Reihenfolge benötigen. SSH Updater
+automatisiert den technischen Compose-Image-Ablauf; die Upgradehinweise der
+Anwendung bleiben maßgeblich.
+
+## Lokale In-App-Hilfe
+
+Über **Hilfe** steht eine vollständig lokale Offline-Anleitung mit 20 Themen zu
+Einrichtung, Hosts, SSH, Systemaktionen, Docker/Compose, Sicherheit und
+Fehlerbehebung bereit. Dafür ist keine Internetverbindung erforderlich.
+Die ausführliche Bedienung steht dort und wird hier nicht vollständig wiederholt.
+
 ## Einsatzbereich und Sicherheit
 
-SSH Updater wurde entwickelt, um eigene und vertrauenswürdige Linux-Systeme, VMs
-und Container im LAN beziehungsweise in administrierten Netzwerken bequem zentral
-zu aktualisieren. Viele dieser Aufgaben könnten auch einzelne Shell-Skripte
-erledigen; die Anwendung fasst sie in einer grafischen Oberfläche zusammen.
+SSH Updater ist für eigene oder vertrauenswürdige Systeme innerhalb eines
+**kontrollierten, sicheren LANs** vorgesehen. Es ist kein öffentliches
+Internet-Admin-Portal, Multi-Tenant-System, Zero-Trust-Gateway oder
+Bastion-/Jump-Host-Ersatz.
+
+Ein vertrauenswürdiges LAN ersetzt weder SSH-Key-Schutz und Host-Key-Prüfung
+noch angemessene Rechte oder Backups/Snapshots vor kritischen Änderungen.
 
 Das Tool enthält angemessene Schutzmaßnahmen für diesen Einsatzzweck. Es ist jedoch
 keine Hochsicherheitslösung für bereits kompromittierte Clients oder feindliche
@@ -102,6 +190,13 @@ ernst genommen und nach Möglichkeit behoben.
 - Remote-Ausgaben werden als Klartext behandelt. Aktionen haben Zeit- und
   Ausgabelimits und können lokal mit **Stopp** beendet werden.
 
+Root ist nicht allgemein erforderlich. Für bewusst administrierte Docker-Hosts
+in dieser kontrollierten Umgebung ist **root + SSH-Key** eine robuste unterstützte
+Konfiguration, keine Empfehlung für Root-Passwort-Login oder pauschale sudo-Rechte.
+Docker-Daemon-Zugriff verleiht weitreichende Hostrechte: Socket/API nicht unnötig
+im Netzwerk exponieren. SSH Updater nutzt den konfigurierten SSH-Zugang.
+Private Keys schützen und unbekannte/geänderte Host-Keys niemals blind bestätigen.
+
 ## Entwicklung / Build
 
 Ein lokales Standalone-Binary unter Linux erstellen:
@@ -122,15 +217,40 @@ Die Tests lassen sich in der eingerichteten Build-Umgebung separat starten:
 ```
 
 Abhängigkeiten stehen in [requirements.txt](requirements.txt) und
-[requirements-build.txt](requirements-build.txt). Ergänzende technische Hinweise
-zum SSH-Transport stehen in [docs/transport-limit.md](docs/transport-limit.md).
+[requirements-build.txt](requirements-build.txt).
 
-## Roadmap
+## Technische Dokumentation
 
-- Headless-Betrieb auf dem Proxmox-Host
+Architektur- und Sicherheitsdetails für Entwickler; die primäre
+Benutzeranleitung befindet sich in der Anwendung.
+
+- [Compose-Erkennung](docs/docker-compose-discovery.md)
+- [Imageprüfung und Registry-Sitzungscache](docs/docker-image-updates.md)
+- [Live-Preflight](docs/docker-preflight.md)
+- [Gezielter Image-Pull](docs/docker-image-pull.md)
+- [Apply und Containerkontrolle](docs/docker-apply.md)
+- [Abschlussverifikation](docs/docker-verification.md)
+- [SSH-Transportlimits](docs/transport-limit.md)
+
+## Projekt und Mitwirkende
+
+Projektverantwortung: **Holger Mangold**. Mitwirkung / Unterstützung: **Calimero**.
+Der Autorenhinweis der GUI lautet `© @Faber38 / © @CalimerO`.
+
+Bei Entwicklung, Codeanalyse, Tests und Dokumentation wurden KI-gestützte
+Werkzeuge unterstützend eingesetzt. Entscheidungen, Prüfung und Freigabe der
+Änderungen verbleiben beim Projektverantwortlichen.
+
+## Mögliche zukünftige Erweiterungen
+
+Unverbindliche Ideen ohne Releasezusage:
+
+- Headless-Betrieb auf einem Proxmox-Host
 - Log-Archivierung und Export
 - Optionale Statusmeldungen via Telegram
 
 ## Lizenz
 
 MIT License – siehe [LICENSE](LICENSE).
+
+Copyright (c) 2025 Holger Mangold

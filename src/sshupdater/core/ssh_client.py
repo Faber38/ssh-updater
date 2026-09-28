@@ -1,9 +1,12 @@
 from __future__ import annotations
 import asyncssh, logging, re
 from collections import deque
+from dataclasses import asdict
 from typing import Dict, Any, Tuple
 from .ssh_connection import connect_host
 from . import credentials
+from . import docker_compose
+from . import docker_image_updates
 from .remote_process import capture, stream, CommandExit, RemoteTimeoutError, STREAM_TIMEOUT
 
 logger = logging.getLogger(__name__)
@@ -99,14 +102,38 @@ async def _check_arch(conn):
     n = sum(1 for line in out.splitlines() if line.strip())
     return n, err.strip()
 
-async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
+async def check_updates_for_host(host: Dict[str, Any], *, registry_session=None) -> Dict[str, Any]:
     name = host.get("name") or f"id:{host['id']}"
     ip, user, _ = credentials.normalize_target(host)
     if not ip or not user:
         return {"host_id": host["id"], "name": name, "status": "error", "note": "IP/User fehlt"}
 
+    discovery = {}
     try:
         async with connect_host(host) as conn:
+            discovery = {"docker_compose": asdict(await docker_compose.discover(conn))}
+            docker_result = discovery["docker_compose"]
+            if docker_result["status"] == "ok" and docker_result["projects"]:
+                try:
+                    # Opaque connection scope: never retain credentials in the registry cache.
+                    import hashlib
+                    scope = hashlib.sha256(repr(tuple(host.get(k) for k in (
+                        'id', 'primary_ip', 'port', 'user', 'auth_method', 'key_path', 'password_enc'
+                    ))).encode()).hexdigest()
+                    image_results = await docker_image_updates.check_projects(
+                        conn, docker_result["projects"], registry_session, scope)
+                    for project in docker_result["projects"]:
+                        project["image_updates"] = image_results[project["name"]]
+                except Exception:
+                    # Optional image checks cannot change the package result.
+                    # Cancellation (BaseException) still propagates to the worker.
+                    image_results = {
+                        project["name"]: docker_image_updates.project_result([
+                            docker_image_updates.ImageCheck().fail(docker_image_updates.CheckFailure("command_error"))
+                        ]) for project in docker_result["projects"]
+                    }
+                    for project in docker_result["projects"]:
+                        project["image_updates"] = image_results[project["name"]]
             distro = await _detect_distro(conn)
             if distro == "debian":
                 n, note = await _check_debian(conn)
@@ -115,12 +142,12 @@ async def check_updates_for_host(host: Dict[str, Any]) -> Dict[str, Any]:
             elif distro == "arch":
                 n, note = await _check_arch(conn)
             else:
-                return {"host_id": host["id"], "name": name, "status": "error", "note": "Unbekannte Distro"}
-            return {"host_id": host["id"], "name": name, "status": "ok", "distro": distro, "updates": max(n,0), "note": note or ""}
+                return {"host_id": host["id"], "name": name, "status": "error", "note": "Unbekannte Distro", **discovery}
+            return {"host_id": host["id"], "name": name, "status": "ok", "distro": distro, "updates": max(n,0), "note": note or "", **discovery}
     except UpdateCheckError as e:
-        return {"host_id": host["id"], "name": name, "status": "error", "note": str(e)}
+        return {"host_id": host["id"], "name": name, "status": "error", "note": str(e), **discovery}
     except (asyncssh.Error, OSError) as e:
-        return {"host_id": host["id"], "name": name, "status": "error", "note": f"SSH: {e}"}
+        return {"host_id": host["id"], "name": name, "status": "error", "note": f"SSH: {e}", **discovery}
 
 # ---------- Simulation (Dry-Run) ----------
 

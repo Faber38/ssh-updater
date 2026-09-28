@@ -5,6 +5,7 @@ import shutil
 import subprocess
 import ipaddress
 import asyncio
+from copy import deepcopy
 
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -13,6 +14,37 @@ from PyQt6 import QtWidgets, QtGui, QtCore
 
 from sshupdater.core import settings
 from .ui_text import PlainTextLog, PlainMessageBox
+from .ui_docker_preview import DockerUpdatePreviewDialog
+from .docker_plan import build_plan, selection
+from .ui_docker import PROJECT_ROLE, DETAILS_ROLE, DockerHostTable, DockerDetailsDialog, details_available, engine_version
+
+
+def _docker_status_item(discovery=None):
+    """Format only this check's discovery; never infer package update status."""
+    if not discovery:
+        text = "Nicht geprüft"
+    elif discovery.get("status") == "docker_missing":
+        text = "—"
+    elif discovery.get("status") == "permission_denied":
+        text = "⚠ Keine Berechtigung"
+    elif discovery.get("status") in ("ok", "compose_missing"):
+        raw = discovery.get("docker_version") or ""
+        version = engine_version(raw)
+        text = f"🐳 Docker {version}" if version else "🐳 Docker (Version unbekannt)"
+        if discovery.get("status") == "compose_missing":
+            text += " – Compose fehlt"
+    else:
+        text = "⚠ Docker-Fehler"
+    item = QtGui.QStandardItem(text)
+    item.setEditable(False)
+    if details_available(discovery):
+        item.setData(True, DETAILS_ROLE)
+        item.setToolTip('Docker-Details anzeigen' if discovery.get('status') == 'ok'
+                        else 'Docker-Fehlerdetails anzeigen')
+        font = item.font()
+        font.setUnderline(True)
+        item.setFont(font)
+    return item
 
 # Optional nur für Windows-Infos (auf Linux nicht nötig)
 try:
@@ -393,11 +425,26 @@ class SysInfoWidget(QtWidgets.QFrame):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
+        from .core.registry_session import RegistrySession
+        self._registry_session = RegistrySession()
+        self._docker_results = {}
+        self._docker_connections = {}
+        self._docker_context_versions = {}
+        self._docker_result_versions = {}
+        self._docker_plan = None
+        self._preflight_passed = None
+        self._docker_pull_state = None
+        self._docker_apply_result = None
+        self._docker_verification_result = None
+        self._preflight_rejected = {}
+        self._preflight_busy = False
+        self._rebuilding_hosts = False
         self.setWindowTitle("SSH Updater")
         self.resize(1100, 680)
 
         # Toolbar
-        tb = QtWidgets.QToolBar("Main")
+        from .ui_resources import ContainerToolBar
+        tb = ContainerToolBar("Main")
         tb.setIconSize(QtCore.QSize(18, 18))
         self.addToolBar(tb)
 
@@ -407,6 +454,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.act_clean = QtGui.QAction("Bereinigen", self)
         self.act_reboot = QtGui.QAction("Reboot", self)
         self.act_config = QtGui.QAction("Konfiguration", self)
+        self.act_docker_preview = QtGui.QAction("Update-Vorschau", self)
+        self.act_docker_update = QtGui.QAction("Docker-Update", self)
+        self.act_docker_preview.setEnabled(False)
+        self.act_docker_update.setEnabled(False)
+        self.act_docker_preview.setToolTip("Aktionsplan aus der letzten Hostprüfung anzeigen")
+        self.act_docker_update.setToolTip("Live-Preflight und gezielter Image-Pull – kein Containerwechsel.")
         self.act_stop = QtGui.QAction("Stopp", self)
         self.act_stop.setToolTip("Lokales Warten beenden; Remote-Zustand anschließend prüfen")
         self.act_stop.setEnabled(False)
@@ -427,6 +480,12 @@ class MainWindow(QtWidgets.QMainWindow):
             tb.addAction(a)
         tb.addSeparator()
         tb.addAction(self.act_toggle_checks)
+        from .ui_resources import DockerToolbarMark
+        self.docker_toolbar_mark = DockerToolbarMark(tb)
+        self.act_docker_mark = tb.addWidget(self.docker_toolbar_mark)
+        tb.addAction(self.act_docker_preview)
+        tb.addAction(self.act_docker_update)
+        tb.container_actions = (self.act_docker_mark, self.act_docker_preview, self.act_docker_update)
 
         # --- Rechter Bereich der Toolbar ---
         spacer = QtWidgets.QWidget()
@@ -436,9 +495,12 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         tb.addWidget(spacer)
 
-        # Stopp ganz rechts, direkt vor dem Autor-Hinweis
+        # Globale Aktionen rechts, außerhalb der Container-Gruppe
         tb.addSeparator()
         tb.addAction(self.act_stop)
+        self.act_help = QtGui.QAction("Hilfe", self)
+        self.act_help.triggered.connect(self._open_help)
+        tb.addAction(self.act_help)
         tb.addSeparator()
 
         self.userLabel = QtWidgets.QLabel(" © @Faber38 / © @CalimerO")
@@ -449,6 +511,8 @@ class MainWindow(QtWidgets.QMainWindow):
         tb.addWidget(self.userLabel)
 
         # Klick-Handler
+        self.act_docker_update.triggered.connect(self._start_docker_preflight)
+        self.act_docker_preview.triggered.connect(self._open_docker_preview)
         self.act_config.triggered.connect(self._open_config)
         self.act_check.triggered.connect(self._on_check)
         self.act_sim.triggered.connect(self._on_sim)
@@ -466,7 +530,8 @@ class MainWindow(QtWidgets.QMainWindow):
         left.setMaximumWidth(600)
 
         # Tabelle
-        self.table = QtWidgets.QTableView()
+        self.table = DockerHostTable()
+        self.table.docker_clicked.connect(self._open_docker_details)
         self._reload_hosts()
         self.table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
@@ -516,7 +581,6 @@ class MainWindow(QtWidgets.QMainWindow):
             except Exception:
                 pass
 
-        self._apply_theme()
         from sshupdater import __version__
 
         self.setWindowTitle(f"SSH Updater v{__version__}")
@@ -537,6 +601,406 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.append('Aktion abgebrochen; bestehende Passwörter wurden nicht automatisch geändert.')
         return False
 
+    def _docker_preview_hosts(self):
+        hosts = []
+        model = self.table.model()
+        for row in range(model.rowCount()):
+            parent = model.item(row, 0)
+            name = model.item(row, 1)
+            host_id = name.data(QtCore.Qt.ItemDataRole.UserRole)
+            discovery = self._docker_results.get(host_id) or {}
+            if discovery.get('status') != 'ok':
+                continue
+            selected = {parent.child(i, 0).data(PROJECT_ROLE) for i in range(parent.rowCount())
+                        if parent.child(i, 0).checkState() == QtCore.Qt.CheckState.Checked}
+            projects = [p for p in discovery.get('projects', []) if
+                        (p.get('name'), tuple(p.get('config_files') or []), p.get('config_files_raw')) in selected]
+            if projects:
+                context = tuple(self._docker_connections.get(host_id, ())[:5]) + (self._docker_context_versions.get(host_id, 0),)
+                hosts.append(dict(host_id=host_id, name=name.text(), connection_identity=context,
+                                  docker_version=discovery.get('docker_version'),
+                                  compose_version=discovery.get('compose_version'),
+                                  result_revision=self._docker_result_versions.get(host_id, 0), projects=projects))
+        return hosts
+
+    def _prepared_docker_apply(self):
+        """Return only a completely prepared Phase-4b state; never table selection."""
+        state = self._docker_pull_state
+        if not state:
+            return None
+        result, plan = state['result'], state['plan']
+        if (result.get('status') != 'pulled' or not result.get('apply_pending')
+                or not result.get('mutation_attempted') or not plan.candidates):
+            return None
+        expected = {(p.host_id, p.name, image[0], image[3], image[4])
+                    for p in plan.candidates for image in p.images}
+        rows = result.get('pulls', [])
+        actual = {(r.get('host_id'), r.get('project'), r.get('service'),
+                   r.get('image'), r.get('platform')) for r in rows}
+        if (not expected or actual != expected or len(rows) != len(expected)
+                or any(r.get('status') != 'pulled' or r.get('exit_code') != 0 for r in rows)):
+            return None
+        return state
+
+    def _invalidate_docker_plan(self):
+        self._preflight_passed = None
+        if self._preflight_busy and hasattr(self, 'preflight_worker'):
+            self.preflight_worker.request_stop()
+        self._docker_plan = None
+        self.act_docker_update.setEnabled(self._prepared_docker_apply() is not None and not self._preflight_busy)
+
+    def _open_docker_preview(self):
+        if self._prepared_docker_apply() is not None or self._verification_pending() or self._preflight_busy:
+            return
+        self._invalidate_docker_plan()
+        hosts = self._docker_preview_hosts()
+        if hosts:
+            plan = build_plan(hosts)
+            dialog = DockerUpdatePreviewDialog(self, hosts)
+            dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+            dialog.show()
+            self._docker_plan = plan if plan.candidates else None
+            self._sync_docker_actions()
+
+    def _sync_docker_actions(self, *args):
+        """Offer the next operation of the RAM-only update cycle."""
+        if self._rebuilding_hosts:
+            return
+        model = self.table.model()
+        selected = False
+        if model is not None:
+            for row in range(model.rowCount()):
+                parent = model.item(row, 0)
+                if any(parent.child(child, 0).checkState() == QtCore.Qt.CheckState.Checked
+                       for child in range(parent.rowCount())):
+                    selected = True
+                    break
+        prepared = self._prepared_docker_apply() is not None
+        self.act_docker_preview.setEnabled(selected and not self._preflight_busy and not prepared and not self._verification_pending())
+        if self._docker_plan is not None:
+            if (selection(self._docker_preview_hosts()) != self._docker_plan.selection
+                    or any(self._preflight_rejected.get(p.host_id) == p.revision
+                           for p in self._docker_plan.selection)):
+                self._invalidate_docker_plan()
+        self.act_docker_update.setText('Docker prüfen' if self._verification_pending() else
+                                      'Docker anwenden' if prepared else 'Docker-Update')
+        self.act_docker_update.setToolTip(
+            'Laufenden Container und Registry read-only prüfen; Registry-Backoff wird respektiert.' if self._verification_pending() else
+            'Geladene Docker-Images auf die vorbereiteten Compose-Services anwenden.' if prepared else
+            'Live-Preflight und gezielter Image-Pull – kein Containerwechsel.')
+        self.act_docker_update.setEnabled((prepared or self._docker_plan is not None or self._verification_pending()) and not self._preflight_busy)
+
+    def _start_docker_preflight(self):
+        from .core import db, docker_preflight
+        if self._preflight_busy:
+            return
+        self._sync_docker_actions()
+        if self._verification_pending():
+            self._start_docker_verification()
+            return
+        if self._prepared_docker_apply() is not None:
+            self._start_docker_apply()
+            return
+        if self._docker_plan is None:
+            return
+        # Do not overlap a preflight with any existing system worker.
+        if any(isinstance(getattr(self, name, None), QtCore.QThread)
+               and getattr(self, name).isRunning() for name in
+               ('worker', 'sim_worker', 'upg_worker', 'clean_sim_worker', 'clean_run_worker', 'reboot_worker')):
+            self.statusBar().showMessage('Bitte laufende Hostaktion zuerst beenden.')
+            return
+        try:
+            host_ids = {p.host_id for p in self._docker_plan.candidates}
+            hosts = {h['id']: h for h in db.list_hosts() if h['id'] in host_ids}
+            if set(hosts) != host_ids or any(
+                    tuple(h.get(k) for k in ('primary_ip', 'user', 'port', 'auth_method', 'key_path', 'password_enc'))
+                    != self._docker_connections.get(hid) for hid, h in hosts.items()):
+                raise ValueError('changed')
+        except Exception:
+            for project in self._docker_plan.selection:
+                self._preflight_rejected[project.host_id] = project.revision
+            self._invalidate_docker_plan()
+            self._show_preflight_result(docker_preflight.failed('host'))
+            return
+        self._preflight_passed = None
+        self._preflight_busy = True
+        self._preflight_actions = {a: a.isEnabled() for a in (
+            self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config)}
+        for action in self._preflight_actions:
+            action.setEnabled(False)
+        self.act_stop.setEnabled(True)
+        self._sync_docker_actions()
+        self.statusBar().showMessage('Docker-Preflight …')
+        self.preflight_worker = _DockerPreflightWorker(self._docker_plan, hosts)
+        self.preflight_worker.progress.connect(self.statusBar().showMessage)
+        self.preflight_worker.finished.connect(self._on_preflight_done)
+        self.preflight_worker.start()
+
+    def _on_preflight_done(self):
+        worker = self.preflight_worker
+        self._preflight_busy = False
+        result = worker.result
+        self._sync_docker_actions()
+        if worker.stop_requested and result.get('status') != 'cancelled':
+            result = worker.pull_run.interrupted()
+        elif self._docker_plan is not worker.plan:
+            result = dict(result, status='failed', reason='plan',
+                          note='Plan zwischenzeitlich geändert. Weitere Schritte wurden gestoppt.')
+        # Consume the approval, including after partial/unknown remote effects.
+        for project in worker.plan.selection:
+            self._preflight_rejected[project.host_id] = project.revision
+        if result.get('mutation_attempted'):
+            self._docker_pull_state = dict(plan=worker.plan, result=deepcopy(result))
+        self._invalidate_docker_plan()
+        for action, enabled in self._preflight_actions.items():
+            action.setEnabled(enabled)
+        self.act_stop.setEnabled(False)
+        self._sync_docker_actions()
+        self.statusBar().showMessage('Image geladen – Apply ausstehend' if result['status'] == 'pulled'
+                                    else 'Docker-Image-Pull/Preflight nicht erfolgreich')
+        if not getattr(self, '_closing', False):
+            self._show_preflight_result(result)
+
+    def _verification_pending(self):
+        return bool(self._docker_apply_result and self._docker_apply_result.get('verification_pending'))
+
+    def _start_docker_apply(self):
+        from .core import db
+        state = self._prepared_docker_apply()
+        if state is None or self._preflight_busy or self._verification_pending():
+            return
+        if any(isinstance(getattr(self, name, None), QtCore.QThread)
+               and getattr(self, name).isRunning() for name in
+               ('worker', 'sim_worker', 'upg_worker', 'clean_sim_worker', 'clean_run_worker', 'reboot_worker')):
+            self.statusBar().showMessage('Bitte laufende Hostaktion zuerst beenden.')
+            return
+        # Consume the prepared capability before starting; never retry automatically.
+        self._docker_pull_state = None
+        self._docker_plan = None
+        self._docker_apply_result = None
+        try:
+            host_ids = {p.host_id for p in state['plan'].candidates}
+            hosts = {h['id']: h for h in db.list_hosts() if h['id'] in host_ids}
+            if set(hosts) != host_ids or any(
+                    tuple(h.get(k) for k in ('primary_ip', 'user', 'port', 'auth_method', 'key_path', 'password_enc'))
+                    != self._docker_connections.get(hid) for hid, h in hosts.items()):
+                raise ValueError('host')
+        except Exception:
+            self._docker_apply_result = dict(status='failed', verification_pending=False,
+                note='Host-Verbindungskontext verändert. Bitte Host erneut prüfen und neue Vorschau erstellen.', applies=[])
+            self._sync_docker_actions()
+            self._show_apply_result(self._docker_apply_result)
+            return
+        self._preflight_busy = True
+        self._preflight_actions = {a: a.isEnabled() for a in (
+            self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config)}
+        for action in self._preflight_actions:
+            action.setEnabled(False)
+        self.act_stop.setEnabled(True)
+        self._sync_docker_actions()
+        self.statusBar().showMessage('Docker-Apply-Precheck …')
+        self.preflight_worker = _DockerApplyWorker(state, hosts)
+        self.preflight_worker.progress.connect(self.statusBar().showMessage)
+        self.preflight_worker.finished.connect(self._on_apply_done)
+        self.preflight_worker.start()
+
+    def _on_apply_done(self):
+        worker = self.preflight_worker
+        result = worker.apply_run.interrupted() if worker.stop_requested else worker.result
+        self._docker_apply_result = deepcopy(result)
+        self._docker_verification_result = None
+        self._preflight_busy = False
+        for action, enabled in self._preflight_actions.items():
+            action.setEnabled(enabled)
+        self.act_stop.setEnabled(False)
+        self._sync_docker_actions()
+        self.statusBar().showMessage('Apply erfolgreich – Verifikation ausstehend' if self._verification_pending()
+                                    else 'Docker-Apply nicht erfolgreich')
+        if not getattr(self, '_closing', False):
+            self._show_apply_result(result)
+
+    def _start_docker_verification(self):
+        from .core import db
+        if not self._verification_pending() or self._preflight_busy:
+            return
+        if any(isinstance(getattr(self, name, None), QtCore.QThread)
+               and getattr(self, name).isRunning() for name in
+               ('worker', 'sim_worker', 'upg_worker', 'clean_sim_worker', 'clean_run_worker', 'reboot_worker')):
+            self.statusBar().showMessage('Bitte laufende Hostaktion zuerst beenden.')
+            return
+        try:
+            hosts = {h['id']: h for h in db.list_hosts() if
+                     tuple(h.get(k) for k in ('primary_ip', 'user', 'port', 'auth_method', 'key_path', 'password_enc'))
+                     == self._docker_connections.get(h['id'])}
+            for row in self._docker_apply_result['applies']:
+                if not self._verification_context_matches(row):
+                    hosts.pop(row['host_id'], None)
+        except Exception:
+            hosts = {}  # Report local context failure without losing the apply outcome.
+        self._preflight_busy = True
+        self._preflight_actions = {a: a.isEnabled() for a in (
+            self.act_check, self.act_sim, self.act_upg, self.act_clean, self.act_reboot, self.act_config)}
+        for action in self._preflight_actions:
+            action.setEnabled(False)
+        self.act_stop.setEnabled(True)
+        self._sync_docker_actions()
+        self.statusBar().showMessage('Docker prüfen …')
+        self.preflight_worker = _DockerVerificationWorker(self._docker_apply_result, hosts,
+            self._registry_session, self._docker_verification_result)
+        self.preflight_worker.progress.connect(self.statusBar().showMessage)
+        self.preflight_worker.finished.connect(self._on_verification_done)
+        self.preflight_worker.start()
+
+    def _verification_context_matches(self, row):
+        identity = tuple(self._docker_connections.get(row['host_id'], ())[:5]) + (
+            self._docker_context_versions.get(row['host_id'], 0),)
+        return identity == tuple(row.get('connection', ()))
+
+    def _on_verification_done(self):
+        worker = self.preflight_worker
+        result = worker.verification_run.interrupted() if worker.stop_requested else worker.result
+        result = deepcopy(result)
+        for row in result['projects']:
+            if not self._verification_context_matches(row):
+                row.update(status='local_changed', reason='host', note='Apply war erfolgreich; Host-Verbindungskontext inzwischen geändert.')
+                row.pop('image_updates', None)
+                result.update(completed=False, verification_pending=True, status='pending')
+        self._docker_verification_result = result
+        self.table.remember_projects()
+        self._rebuilding_hosts = True
+        try:
+            for row in result['projects']:
+                discovery = self._docker_results.get(row['host_id'])
+                if not discovery:
+                    continue
+                project = next((p for p in discovery.get('projects', [])
+                                if p['name'] == row['project'] and tuple(p.get('config_files', [])) == tuple(row['paths'])), None)
+                if project is None:
+                    continue
+                if row.get('image_updates'):
+                    project['image_updates'] = deepcopy(row['image_updates'])
+                else:
+                    from .core import docker_image_updates as images
+                    project['image_updates'] = images.project_result([
+                        images.ImageCheck().fail(images.CheckFailure('context'))])
+                self._docker_result_versions[row['host_id']] = self._docker_result_versions.get(row['host_id'], 0) + 1
+                index = self._find_row_by_host_id(row['host_id'])
+                if index >= 0:
+                    self.table.populate_projects(row['host_id'], self.table.model().item(index, 0), discovery)
+        finally:
+            self._rebuilding_hosts = False
+        if result['completed']:
+            self._docker_pull_state = None
+            self._docker_apply_result = None
+            self._preflight_passed = None
+        self._docker_plan = None
+        self._preflight_busy = False
+        for action, enabled in self._preflight_actions.items():
+            action.setEnabled(enabled)
+        self.act_stop.setEnabled(False)
+        self._sync_docker_actions()
+        self.statusBar().showMessage('Docker-Update vollständig verifiziert' if result['status'] == 'verified' else
+                                    'Apply erfolgreich – Ergebnis der Abschlussprüfung beachten')
+        if not getattr(self, '_closing', False):
+            self._show_verification_result(result)
+
+    def _show_verification_result(self, result):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.setWindowTitle('Docker-Update erfolgreich' if result['status'] == 'verified' else 'Docker-Apply erfolgreich – Abschlussprüfung')
+        dialog.resize(800, 550)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        text = QtWidgets.QPlainTextEdit()
+        text.setReadOnly(True)
+        lines = ['Der Docker-Apply war erfolgreich. Die Abschlussprüfung ist read-only.']
+        if result['status'] == 'cancelled':
+            lines.append('Abschlussprüfung abgebrochen. Verifikation bleibt ausstehend; erneute Prüfung möglich.')
+        for row in result['projects']:
+            lines.extend(['', f"Host: {row.get('host', row['host_id'])}", f"Projekt: {row['project']}", row['note']])
+            for i in row.get('image_updates', {}).get('images', []):
+                lines.extend([f"Service: {i['service']}", f"Image: {i['image']}", f"Plattform: {i['platform']}",
+                              {'current': '✓ aktuell', 'update_available': '↑ Image-Update'}.get(i['status'], 'Prüfung ausstehend')])
+                if i.get('note'):
+                    lines.append(i['note'])
+        if result['status'] == 'verified':
+            lines.append('Der laufende Container verwendet das aktualisierte Image. Docker-Update vollständig verifiziert.')
+        text.setPlainText('\n'.join(lines))
+        layout.addWidget(text)
+        buttons = QtWidgets.QDialogButtonBox()
+        buttons.addButton('Schließen', QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.show()
+
+    def _show_apply_result(self, result):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.setWindowTitle('Docker-Apply erfolgreich' if result['status'] == 'apply_succeeded' else 'Docker-Apply nicht erfolgreich')
+        dialog.resize(760, 500)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        text = QtWidgets.QPlainTextEdit()
+        text.setReadOnly(True)
+        lines = [result['note']]
+        statuses = {'apply_succeeded': 'Angewendet – Verifikation ausstehend',
+                    'unknown': 'Containerzustand nicht bestätigt', 'failed': 'Precheck fehlgeschlagen'}
+        for row in result.get('applies', []):
+            lines.extend(['', f"Host-ID: {row['host_id']}", f"Projekt: {row['project']}",
+                          'Services: ' + ', '.join(row['services']), statuses.get(row['status'], row['status'])])
+            for c in row.get('containers', []):
+                lines.extend([f"Container: {c['container_id']}", f"Image: {c['image']}", f"Plattform: {c['platform']}"])
+        text.setPlainText('\n'.join(lines))
+        layout.addWidget(text)
+        buttons = QtWidgets.QDialogButtonBox()
+        buttons.addButton('Schließen', QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.show()
+
+    def _show_preflight_result(self, result):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        title = ('Docker Image-Pull erfolgreich' if result['status'] == 'pulled' else
+                 'Docker Image-Pull abgebrochen' if result['status'] == 'cancelled' else
+                 'Docker Image-Pull / Preflight fehlgeschlagen')
+        dialog.setWindowTitle(title)
+        dialog.resize(760, 500)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        text = QtWidgets.QPlainTextEdit()
+        text.setReadOnly(True)
+        lines = [result['note']]
+        statuses = {'pulled': 'Image geladen · Apply ausstehend', 'failed': 'Pull fehlgeschlagen',
+                    'unknown': 'Pull-Abschluss unbekannt', 'pulling': 'Pull-Abschluss unbekannt'}
+        for row in result.get('pulls', []):
+            lines.append(f"\nHost: {row['host']}\nProjekt: {row['project']}\nService: {row['service']}\nImage: {row['image']}\nStatus: {statuses.get(row['status'], row['status'])}")
+            if row.get('note'):
+                lines.append(row['note'])
+        if result['status'] != 'pulled':
+            context = result.get('context') or result
+            for key, label in (('host_id', 'Host-ID'), ('project', 'Projekt'), ('service', 'Service')):
+                if context.get(key) is not None:
+                    lines.append(f"{label}: {context[key]}")
+            lines.append('Weitere Pulls wurden gestoppt. Vor erneutem Versuch normale Prüfung und neue Vorschau erforderlich.')
+        if result.get('mutation_attempted'):
+            if result['status'] == 'pulled':
+                lines.extend(['', 'Der laufende Container wurde noch nicht aktualisiert.',
+                              'Es wurde kein Container neu erstellt oder neu gestartet.',
+                              'Das neue Image wurde geladen. Die Container-Aktualisierung steht noch aus.'])
+                if self._prepared_docker_apply() is not None:
+                    lines.append('Das Update kann jetzt mit „Docker anwenden“ fortgesetzt werden.')
+            else:
+                lines.extend(['', 'Der lokale Imagebestand kann teilweise verändert worden sein.',
+                              'SSH Updater hat keine Containeränderung ausgeführt.',
+                              'Ein unterbrochener Remote-Pull kann weiterlaufen. Keine automatische Bereinigung.'])
+        else:
+            lines.extend(['', 'Kein Pull gestartet. Es wurden keine Änderungen durchgeführt.'])
+        text.setPlainText('\n'.join(lines))
+        layout.addWidget(text)
+        buttons = QtWidgets.QDialogButtonBox()
+        buttons.addButton('Schließen', QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        dialog.show()
+
     def _get_selected_host_ids(self) -> list:
         model = self.table.model()
         ids = []
@@ -554,23 +1018,27 @@ class MainWindow(QtWidgets.QMainWindow):
                     ids.append(int(hid))
         return ids
 
+    def _open_help(self):
+        from .ui_help import HelpDialog
+        dialog = HelpDialog(self)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
+
     def _apply_theme(self):
-        q_theme = QtCore.QSettings("Faber38", "SSH Updater").value("ui/theme", None)
-        theme = (q_theme or settings.THEME or "standard").lower()
+        from .ui_theme import apply_theme
+        apply_theme(QtWidgets.QApplication.instance())
 
-        base = Path(__file__).resolve().parents[1]  # src/sshupdater/..
-        qss = None
-        if theme == "dark":
-            qss = base / "assets" / "qss" / "dark.qss"
-        elif theme == "light":
-            qss = base / "assets" / "qss" / "light.qss"
-        elif theme == "colour":
-            qss = base / "assets" / "qss" / "colour.qss"
-
-        if qss and qss.exists():
-            self.setStyleSheet(qss.read_text(encoding="utf-8"))
-        else:
-            self.setStyleSheet("")
+    def _open_docker_details(self, index):
+        if index.parent().isValid() or index.column() != 6 or not index.data(DETAILS_ROLE):
+            return
+        name = self.table.model().item(index.row(), 1)
+        result = self._docker_results.get(name.data(QtCore.Qt.ItemDataRole.UserRole))
+        if details_available(result):
+            dialog = DockerDetailsDialog(self, name.text(), result)
+            try:
+                dialog.exec()
+            finally:
+                dialog.deleteLater()
 
     def _open_config(self):
         from .ui_config import ConfigDialog
@@ -645,15 +1113,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.log.clear()
         self.log.append("Starte Prüfungen...\n")
 
+        # Results belong to this check only, including hosts not selected again.
+        self._invalidate_docker_plan()
+        self.table.remember_projects()
+        self._docker_results.clear()
+        model = self.table.model()
+        for row in range(model.rowCount()):
+            parent = model.item(row, 0)
+            parent.removeRows(0, parent.rowCount())
+            model.setItem(row, 6, _docker_status_item())
+
         if not self._prepare_passwords(selected):
             return
-        self.worker = _CheckWorker(selected)
+        self.worker = _CheckWorker(selected, registry_session=self._registry_session)
         self.worker.one_result.connect(self._on_check_result)
         self.worker.finished_all.connect(self._on_check_done)
         self.act_stop.setEnabled(True)
         self.worker.start()
 
     def _on_check_result(self, res: dict):
+        host_id = res.get('host_id')
+        self._docker_result_versions[host_id] = self._docker_result_versions.get(host_id, 0) + 1
+        if self._docker_plan and any(p.host_id == host_id for p in self._docker_plan.selection):
+            self._invalidate_docker_plan()
         if res.get("status") == "ok":
             self.log.append(
                 f"✔ {res['name']} [{res.get('distro', '?')}]: {res.get('updates', 0)} Updates"
@@ -682,9 +1164,19 @@ class MainWindow(QtWidgets.QMainWindow):
                 status_item.setIcon(self._status_icon_for(False, None))
 
             model.setItem(row, 5, status_item)
+            discovery = res.get("docker_compose")
+            if discovery:
+                self._docker_results[res["host_id"]] = deepcopy(discovery)
+            else:
+                self._docker_results.pop(res["host_id"], None)
+            self.table.remember_projects()
+            model.setItem(row, 6, _docker_status_item(discovery))
+            self.table.populate_projects(res["host_id"], model.item(row, 0), discovery)
+            self.table.resizeColumnToContents(1)
+            self.table.resizeColumnToContents(6)
 
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            model.setItem(row, 6, QtGui.QStandardItem(timestamp))
+            model.setItem(row, 7, QtGui.QStandardItem(timestamp))
 
             try:
                 from .core import db
@@ -793,8 +1285,10 @@ class MainWindow(QtWidgets.QMainWindow):
             a.setEnabled(True)
 
     def _on_stop_requested(self):
+        if self._preflight_busy:
+            self.preflight_worker.request_stop()
         active = [getattr(self, name, None) for name in
-                  ("worker", "sim_worker", "upg_worker", "clean_sim_worker", "clean_run_worker", "reboot_worker")]
+                  ("worker", "sim_worker", "upg_worker", "clean_sim_worker", "clean_run_worker", "reboot_worker", "preflight_worker")]
         for worker in active:
             if isinstance(worker, _CancellableWorker) and worker.isRunning():
                 worker.request_stop()
@@ -878,7 +1372,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 model = self.table.model()
                 ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 model.setItem(row, 5, QtGui.QStandardItem("Online – 0 Updates"))
-                model.setItem(row, 6, QtGui.QStandardItem(ts))
+                model.setItem(row, 7, QtGui.QStandardItem(ts))
                 try:
                     from .core import db
 
@@ -1156,10 +1650,32 @@ class MainWindow(QtWidgets.QMainWindow):
         from .core import db
 
         hosts = db.list_hosts()
+        self._rebuilding_hosts = True
+        self.table.remember_projects()
+
+        # Only retain session results for the same stored connection/auth data.
+        connections = {
+            h["id"]: tuple(h.get(key) for key in (
+                "primary_ip", "user", "port", "auth_method", "key_path", "password_enc"
+            ))
+            for h in hosts
+        }
+        valid_hosts = {host_id for host_id in connections
+                       if self._docker_connections.get(host_id) == connections[host_id]}
+        self.table.retain_hosts(valid_hosts)
+        self._docker_results = {
+            host_id: result for host_id, result in self._docker_results.items()
+            if host_id in connections
+            and self._docker_connections.get(host_id) == connections[host_id]
+        }
+        for host_id in connections:
+            if host_id not in valid_hosts:
+                self._docker_context_versions[host_id] = self._docker_context_versions.get(host_id, 0) + 1
+        self._docker_connections = connections
 
         model = QtGui.QStandardItemModel()
         model.setHorizontalHeaderLabels(
-            ["✓", "Name", "IP", "User", "Auth", "Status", "Letzte Prüfung"]
+            ["✓", "Name", "IP", "User", "Auth", "Status", "Docker", "Letzte Prüfung"]
         )
 
         for h in hosts:
@@ -1188,11 +1704,25 @@ class MainWindow(QtWidgets.QMainWindow):
             for it in (name, ip, user, auth, status, last_item):
                 it.setEditable(False)
 
-            model.appendRow([chk, name, ip, user, auth, status, last_item])
+            docker = _docker_status_item(self._docker_results.get(h["id"]))
+            model.appendRow([chk, name, ip, user, auth, status, docker, last_item])
 
+        sort_column = self.table.header().sortIndicatorSection()
+        sort_order = self.table.header().sortIndicatorOrder()
         self.table.setModel(model)
-        self.table.resizeColumnsToContents()
+        for signal in (model.dataChanged, model.rowsInserted, model.rowsRemoved, model.modelReset):
+            signal.connect(self._sync_docker_actions)
+        self._sync_docker_actions()
+        for row in range(model.rowCount()):
+            host_id = model.item(row, 1).data(QtCore.Qt.ItemDataRole.UserRole)
+            self.table.populate_projects(host_id, model.item(row, 0), self._docker_results.get(host_id))
+        if self.table.isSortingEnabled():
+            self.table.sortByColumn(sort_column, sort_order)
+        for column in range(model.columnCount()):
+            self.table.resizeColumnToContents(column)
         self.table.setColumnWidth(0, 30)
+        self._rebuilding_hosts = False
+        self._sync_docker_actions()
         self._sync_toggle_action()
 
     def closeEvent(self, event):
@@ -1200,7 +1730,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._closing = True
         self.setEnabled(False)
         active = [getattr(self, name, None) for name in
-                  ("worker", "sim_worker", "upg_worker", "clean_sim_worker", "clean_run_worker", "reboot_worker")]
+                  ("worker", "sim_worker", "upg_worker", "clean_sim_worker", "clean_run_worker", "reboot_worker", "preflight_worker")]
         if any(isinstance(worker, QtCore.QThread) and worker.isRunning() for worker in active):
             if not already_closing:
                 self._on_stop_requested()
@@ -1294,12 +1824,97 @@ class _CancellableWorker(QtCore.QThread):
             self._loop = None
 
 
+class _DockerPreflightWorker(_CancellableWorker):
+    """One cancellable job: fresh preflight, targeted pull, stop before apply."""
+    progress = QtCore.pyqtSignal(str)
+
+    def __init__(self, plan, hosts):
+        super().__init__()
+        from .core.docker_pull import PullRun
+        self.plan = plan
+        self.hosts = deepcopy(hosts)
+        self.result = None
+        self.pull_run = PullRun(plan, self.hosts, self.progress.emit)
+
+    def run(self):
+        async def job():
+            self._loop = asyncio.get_running_loop()
+            self._task = asyncio.create_task(self.pull_run.run())
+            if self.stop_requested:
+                self._task.cancel()
+            try:
+                return await self._task
+            except asyncio.CancelledError:
+                return self.pull_run.interrupted()
+            finally:
+                self._task = self._loop = None
+        try:
+            self.result = asyncio.run(job())
+        except Exception:
+            self.result = self.pull_run.outcome('failed', 'Pull-Abschluss nicht bestätigt.', 'error')
+
+
+class _DockerApplyWorker(_CancellableWorker):
+    progress = QtCore.pyqtSignal(str)
+
+    def __init__(self, state, hosts):
+        super().__init__()
+        from .core.docker_apply import ApplyRun
+        self.apply_run = ApplyRun(state, deepcopy(hosts), self.progress.emit)
+        self.result = None
+
+    def run(self):
+        async def job():
+            self._loop = asyncio.get_running_loop()
+            self._task = asyncio.create_task(self.apply_run.run())
+            if self.stop_requested:
+                self._task.cancel()
+            try:
+                return await self._task
+            except asyncio.CancelledError:
+                return self.apply_run.interrupted()
+            finally:
+                self._task = self._loop = None
+        try:
+            self.result = asyncio.run(job())
+        except Exception:
+            self.result = self.apply_run.outcome('failed', 'Apply-Abschluss nicht bestätigt; Containerzustand unbekannt.', 'error')
+
+
+class _DockerVerificationWorker(_CancellableWorker):
+    progress = QtCore.pyqtSignal(str)
+
+    def __init__(self, applied, hosts, session, previous=None):
+        super().__init__()
+        from .core.docker_verification import VerificationRun
+        self.verification_run = VerificationRun(applied, deepcopy(hosts), session, previous, self.progress.emit)
+        self.result = None
+
+    def run(self):
+        async def job():
+            self._loop = asyncio.get_running_loop()
+            self._task = asyncio.create_task(self.verification_run.run())
+            if self.stop_requested:
+                self._task.cancel()
+            try:
+                return await self._task
+            except asyncio.CancelledError:
+                return self.verification_run.interrupted()
+            finally:
+                self._task = self._loop = None
+        try:
+            self.result = asyncio.run(job())
+        except Exception:
+            self.result = self.verification_run.interrupted()
+
+
 class _CheckWorker(_CancellableWorker):
     one_result = QtCore.pyqtSignal(dict)
     finished_all = QtCore.pyqtSignal()
 
-    def __init__(self, host_ids: list | None = None):
+    def __init__(self, host_ids: list | None = None, *, registry_session=None):
         super().__init__()
+        self.registry_session = registry_session
         self.host_ids = host_ids
         self.fatal_error = None
 
@@ -1325,7 +1940,11 @@ class _CheckWorker(_CancellableWorker):
                             }
                         )
                         continue
-                    res = await self._call(h, ssh_client.check_updates_for_host)
+                    operation = ssh_client.check_updates_for_host
+                    if self.registry_session is not None:
+                        from functools import partial
+                        operation = partial(operation, registry_session=self.registry_session)
+                    res = await self._call(h, operation)
                     res.setdefault("host_id", h["id"])
                     self.one_result.emit(res)
 

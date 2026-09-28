@@ -18,12 +18,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version-file: release-python.txt
 
@@ -64,11 +64,12 @@ jobs:
           ARTIFACT_LABEL: ${{ steps.validate.outputs.artifact_label }}
         run: |
           cd dist
-          tar czf "ssh-updater-${ARTIFACT_LABEL}-linux-x86_64.tar.gz" ssh-updater
+          cp ../LICENSE LICENSE
+          tar czf "ssh-updater-${ARTIFACT_LABEL}-linux-x86_64.tar.gz" ssh-updater LICENSE
           ls -l
 
       - name: Upload Linux artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ssh-updater-linux
           path: dist/ssh-updater-${{ steps.validate.outputs.artifact_label }}-linux-x86_64.tar.gz
@@ -81,12 +82,12 @@ jobs:
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version-file: release-python.txt
 
@@ -123,13 +124,14 @@ jobs:
           ARTIFACT_LABEL: ${{ steps.validate.outputs.artifact_label }}
         run: |
           cd dist
+          Copy-Item -LiteralPath ../LICENSE -Destination LICENSE -ErrorAction Stop
           echo "📦 Creating Windows ZIP..."
           dir
-          Compress-Archive -LiteralPath "ssh-updater.exe" -DestinationPath "ssh-updater-${env:ARTIFACT_LABEL}-windows-x86_64.zip"
+          Compress-Archive -LiteralPath "ssh-updater.exe", "LICENSE" -DestinationPath "ssh-updater-${env:ARTIFACT_LABEL}-windows-x86_64.zip"
           dir
 
       - name: Upload Windows artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ssh-updater-windows
           path: dist/ssh-updater-${{ steps.validate.outputs.artifact_label }}-windows-x86_64.zip
@@ -147,7 +149,7 @@ jobs:
 
     steps:
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: dist
 
@@ -157,9 +159,11 @@ jobs:
           ls -R dist
 
       - name: Create GitHub Release and upload assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@6cbd405e2c4e67a21c47fa9e383d020e4e28b836 # v2.3.3
         with:
           tag_name: ${{ needs.build-linux.outputs.release_tag }}
+          name: SSH Updater ${{ needs.build-linux.outputs.release_tag }}
+          prerelease: ${{ endsWith(needs.build-linux.outputs.release_tag, '-beta') }}
           files: |
             dist/ssh-updater-linux/ssh-updater-${{ needs.build-linux.outputs.release_tag }}-linux-x86_64.tar.gz
             dist/ssh-updater-windows/ssh-updater-${{ needs.build-linux.outputs.release_tag }}-windows-x86_64.zip

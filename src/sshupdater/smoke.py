@@ -9,6 +9,7 @@ from cryptography.fernet import Fernet
 from . import __version__
 from .core import ssh_connection, remote_process, credentials, db
 from .ui_text import PlainTextLog
+from .ui_help import HelpDialog
 
 
 def run(resource_path):
@@ -18,6 +19,11 @@ def run(resource_path):
     log.append(sample)
     assert log.toPlainText() == sample
     assert resource_path('assets', 'qss', 'light.qss').is_file()
+    assert resource_path('assets', 'help', 'topics.json').is_file()
+    help_dialog = HelpDialog()
+    assert help_dialog.navigation.topLevelItemCount() == 12
+    assert help_dialog.content.toPlainText().startswith('Erste Schritte')
+    help_dialog.close()
     opts = ssh_connection.options_for(
         {'primary_ip': 'example.invalid', 'user': 'test'}, inspect=True, config=[])
     assert opts.x11_forwarding is False and not opts.agent_forward_path

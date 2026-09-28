@@ -36,7 +36,7 @@ QToolButton:pressed {
 }
 
 /* Tabelle */
-QTableView {
+QTableView, QTreeView#dockerHostTable {
     background-color: #ffffff;
     alternate-background-color: #fff7e6;
     gridline-color: #d6c1a6;
@@ -119,3 +119,6 @@ QScrollBar::handle:vertical:hover {
 QLabel {
     color: #212121;
 }
+
+/* QTreeView needs explicit grid painting; reuse the table grid colour. */
+QTreeView#dockerHostTable { qproperty-gridColor: #d6c1a6; }
