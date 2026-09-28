@@ -104,7 +104,7 @@ class VerificationUiTests(unittest.TestCase):
         w._open_docker_preview()
         self.assertIsNone(w._docker_plan)
         for theme in ('light','dark','colour'):
-            w.setStyleSheet((Path(ui_main.__file__).parent/'assets'/'qss'/(theme+'.qss')).read_text())
+            w.setStyleSheet((Path(ui_main.__file__).parent/'assets'/'qss'/(theme+'.qss')).read_text(encoding="utf-8"))
             w._sync_docker_actions()
             self.assertEqual(w.act_docker_update.text(),'Docker prüfen')
             self.assertTrue(w.act_docker_update.isEnabled())

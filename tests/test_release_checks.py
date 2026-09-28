@@ -21,18 +21,32 @@ class ReleaseTagTests(unittest.TestCase):
                     release.validate_tag(tag)
 
     def test_stable_and_beta_tags_require_exact_version_match(self):
-        for current in ('1.2.5', '1.2.5-beta', '2.0.0', '2.0.0-beta'):
+        versions = ('1.2.5', '1.2.5-beta', '1.2.5-beta2', '1.2.5-beta3',
+                    '1.2.5-beta10', '2.0.0', '2.0.0-beta')
+        for current in versions:
             with self.subTest(version=current), mock.patch.object(release, 'version', return_value=current):
                 self.assertEqual(release.validate_tag('v' + current), 'v' + current)
-                other = current.removesuffix('-beta') if current.endswith('-beta') else current + '-beta'
+                for other in versions:
+                    if other != current:
+                        with self.subTest(tag=other), self.assertRaises(ValueError):
+                            release.validate_tag('v' + other)
+
+    def test_invalid_beta_suffixes_rejected_even_with_matching_application_version(self):
+        for suffix in ('beta0', 'beta1', 'beta02', 'betaX', 'beta.2', 'rc1', 'test'):
+            current = '1.2.5-' + suffix
+            with self.subTest(version=current), mock.patch.object(release, 'version', return_value=current):
                 with self.assertRaises(ValueError):
-                    release.validate_tag('v' + other)
+                    release.validate_tag('v' + current)
+                for event, ref in (('push', 'refs/tags/v' + current),
+                                   ('workflow_dispatch', 'refs/heads/main')):
+                    with self.assertRaises(ValueError):
+                        release.validate_workflow(event, ref, 'a' * 40)
 
     def test_shell_metacharacters_path_and_malformed_tags_rejected(self):
         with mock.patch.object(release, 'version', return_value='1.2.3'):
             for tag in ('v1.2.3;echo injected', 'v1.2.3$(id)', 'v1.2.3`id`',
                         'v1.2.3\n', 'v1.2.3/../x', 'v1.2.3-rc1', 'v01.2.3',
-                        '1.2.3', '', 'v1.2', 'v1.2.4', 'v1.2.3-beta2',
+                        '1.2.3', '', 'v1.2', 'v1.2.4',
                         'v1.2.3-test', 'v1.2.3-irgendwas', 'latest', 'test', 'foo'):
                 with self.subTest(tag=tag), self.assertRaises(ValueError):
                     release.validate_tag(tag)
@@ -65,7 +79,7 @@ class WorkflowModeTests(unittest.TestCase):
         self.assertEqual(result['release_tag'], '')
 
     def test_stable_and_beta_manual_builds_preserve_version(self):
-        for current in ('1.2.4', '1.2.5-beta'):
+        for current in ('1.2.4', '1.2.5-beta', '1.2.5-beta2', '1.2.5-beta10'):
             with self.subTest(version=current), mock.patch.object(release, 'version', return_value=current):
                 self.assertEqual(
                     release.validate_workflow('workflow_dispatch', 'refs/heads/main', self.sha),
@@ -115,13 +129,14 @@ class WorkflowModeTests(unittest.TestCase):
 
     def test_release_prerelease_flag_uses_only_validated_beta_tag(self):
         workflow = (ROOT / '.github/workflows/build-release.yml').read_text(encoding='utf-8')
-        self.assertIn("prerelease: ${{ endsWith(needs.build-linux.outputs.release_tag, '-beta') }}", workflow)
+        self.assertIn("prerelease: ${{ contains(needs.build-linux.outputs.release_tag, '-beta') }}", workflow)
         self.assertIn('name: SSH Updater ${{ needs.build-linux.outputs.release_tag }}', workflow)
         for current, expected in (('1.2.5', False), ('1.2.5-beta', True),
+                                  ('1.2.5-beta2', True), ('1.2.5-beta3', True), ('1.2.5-beta10', True),
                                   ('2.0.0', False), ('2.0.0-beta', True)):
             with self.subTest(version=current), mock.patch.object(release, 'version', return_value=current):
                 result = release.validate_workflow('push', 'refs/tags/v' + current, self.sha)
-                self.assertEqual(result['release_tag'].endswith('-beta'), expected)
+                self.assertEqual('-beta' in result['release_tag'], expected)
                 manual = release.validate_workflow('workflow_dispatch', 'refs/heads/main', self.sha)
                 self.assertEqual(manual['release_tag'], '')
 
@@ -151,7 +166,7 @@ class WorkflowModeTests(unittest.TestCase):
             (root / 'dist' / binary).write_bytes(b'packaging-test-fixture')
             (root / 'dist' / 'unrelated.txt').write_text('Must not be packaged', encoding='utf-8')
             (root / 'LICENSE').write_bytes(license_bytes)
-            for label in ('v1.2.5', 'v1.2.5-beta'):
+            for label in ('v1.2.5', 'v1.2.5-beta', 'v1.2.5-beta2'):
                 env = dict(os.environ, ARTIFACT_LABEL=label)
                 args = (['powershell', '-NoProfile', '-NonInteractive', '-Command',
                          "$ErrorActionPreference = 'Stop'\n" + command] if windows else
@@ -227,6 +242,6 @@ class WorkflowModeTests(unittest.TestCase):
                 self.assertEqual(kwargs.get('encoding'), 'utf-8', str(path))
             return original(path, *args, **kwargs)
         with mock.patch.object(Path, 'read_text', require_utf8), mock.patch('builtins.print'):
-            self.assertRegex(release.version(), r'^\d+\.\d+\.\d+(?:-beta)?$')
+            self.assertRegex(release.version(), r'^\d+\.\d+\.\d+(?:-beta(?:[2-9]|[1-9][0-9]+)?)?$')
             release.check_environment()
             self.test_workflow_trigger_release_gate_permissions_and_shared_checks()

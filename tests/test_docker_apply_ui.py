@@ -53,7 +53,7 @@ class ApplyUiTests(unittest.TestCase):
         w._open_docker_preview()
         self.assertIsNone(w._docker_plan)
         for theme in ('light', 'dark', 'colour'):
-            w.setStyleSheet((Path(ui_main.__file__).parent/'assets'/'qss'/(theme+'.qss')).read_text())
+            w.setStyleSheet((Path(ui_main.__file__).parent/'assets'/'qss'/(theme+'.qss')).read_text(encoding="utf-8"))
             w._sync_docker_actions()
             self.assertFalse(w.act_docker_preview.isEnabled())
             self.assertTrue(w.act_docker_update.isEnabled())

@@ -42,7 +42,7 @@ class HelpTests(unittest.TestCase):
     def test_complete_navigation_initial_content_and_clicks(self):
         dialog=self.help(self.window())
         tree=dialog.navigation
-        topics=json.loads(ui_resources.resource_path('assets','help','topics.json').read_text())
+        topics=json.loads(ui_resources.resource_path('assets','help','topics.json').read_text(encoding="utf-8"))
         expected_topics={topic['id']:topic for topic in topics}
         for topic in topics:
             expected_topics.update((child['id'],child) for child in topic.get('children',[]))
@@ -117,9 +117,9 @@ class HelpTests(unittest.TestCase):
             self.assertFalse(dialog.content.openExternalLinks())
             for url in ('https://example.invalid/test.png','file:///not-a-help-resource'):
                 self.assertIsNone(dialog.content.loadResource(2,QtCore.QUrl(url)))
-        data=json.loads(ui_resources.resource_path('assets','help','topics.json').read_text())
+        data=json.loads(ui_resources.resource_path('assets','help','topics.json').read_text(encoding="utf-8"))
         self.assertEqual(len(data),12)
-        self.assertNotIn('Der vollständige Hilfetext',Path(ui_main.__file__).read_text())
+        self.assertNotIn('Der vollständige Hilfetext',Path(ui_main.__file__).read_text(encoding="utf-8"))
 
     def test_saved_color_and_live_theme_changes(self):
         w=self.start_saved('Color')

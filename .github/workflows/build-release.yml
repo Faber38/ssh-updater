@@ -163,7 +163,7 @@ jobs:
         with:
           tag_name: ${{ needs.build-linux.outputs.release_tag }}
           name: SSH Updater ${{ needs.build-linux.outputs.release_tag }}
-          prerelease: ${{ endsWith(needs.build-linux.outputs.release_tag, '-beta') }}
+          prerelease: ${{ contains(needs.build-linux.outputs.release_tag, '-beta') }}
           files: |
             dist/ssh-updater-linux/ssh-updater-${{ needs.build-linux.outputs.release_tag }}-linux-x86_64.tar.gz
             dist/ssh-updater-windows/ssh-updater-${{ needs.build-linux.outputs.release_tag }}-windows-x86_64.zip

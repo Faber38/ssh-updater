@@ -22,8 +22,8 @@ def version():
 
 
 def validate_tag(tag):
-    if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-beta)?', tag):
-        raise ValueError('Tag must be vMAJOR.MINOR.PATCH with optional -beta suffix')
+    if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-beta(?:[2-9]|[1-9][0-9]+)?)?', tag):
+        raise ValueError('Tag must be vMAJOR.MINOR.PATCH with optional -beta or -betaN suffix (N >= 2)')
     if tag != 'v' + version():
         raise ValueError('Tag and application version differ')
     return tag
@@ -33,8 +33,8 @@ def validate_workflow(event, ref, sha):
     """Return safe artifact names; manual runs never acquire a release tag."""
     current = version()
     if not isinstance(current, str) or not re.fullmatch(
-            r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-beta)?', current):
-        raise ValueError('Application version must be MAJOR.MINOR.PATCH with optional -beta suffix')
+            r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-beta(?:[2-9]|[1-9][0-9]+)?)?', current):
+        raise ValueError('Application version must be MAJOR.MINOR.PATCH with optional -beta or -betaN suffix (N >= 2)')
     if not re.fullmatch(r'[0-9a-f]{40}', sha):
         raise ValueError('Invalid workflow commit SHA')
     if event == 'workflow_dispatch' and ref == 'refs/heads/main':

@@ -29,7 +29,7 @@ class ThemeTests(unittest.TestCase):
         self.app.setStyleSheet('')
         windows = []
         def create():
-            self.assertEqual(self.app.styleSheet(), ui_resources.resource_path('assets','qss',ui_theme.normalize_theme(theme)+'.qss').read_text())
+            self.assertEqual(self.app.styleSheet(), ui_resources.resource_path('assets','qss',ui_theme.normalize_theme(theme)+'.qss').read_text(encoding="utf-8"))
             windows.append(self.window())
             return windows[-1]
         with mock.patch.object(entry.QtWidgets,'QApplication',return_value=self.app), \
@@ -83,7 +83,7 @@ class ThemeTests(unittest.TestCase):
                 dialog.cmb_theme.setCurrentIndex(index)
                 self.app.processEvents()
                 self.assertEqual(ui_theme.saved_theme(),name)
-                self.assertEqual(self.app.styleSheet(),ui_resources.resource_path('assets','qss',name+'.qss').read_text())
+                self.assertEqual(self.app.styleSheet(),ui_resources.resource_path('assets','qss',name+'.qss').read_text(encoding="utf-8"))
             self.assertGreaterEqual(apply.call_count,4)
             dialog.close()
 
@@ -143,14 +143,14 @@ class ThemeTests(unittest.TestCase):
     def test_original_container_svg_has_three_shapes_and_no_font_or_external_resource(self):
         import xml.etree.ElementTree as ET
         path=ui_resources.resource_path('assets','icons','container.svg')
-        root=ET.fromstring(path.read_text())
+        root=ET.fromstring(path.read_text(encoding="utf-8"))
         ns={'svg':'http://www.w3.org/2000/svg'}
         self.assertEqual(len(root.findall('.//svg:rect',ns)),3)
         self.assertTrue(root.findall('.//svg:path',ns))
         for tag in ('text','image','foreignObject','use','script'):
             self.assertFalse(root.findall('.//svg:'+tag,ns))
-        self.assertNotIn('🐳',path.read_text())
-        self.assertIn('Eigenes SSH-Updater-Container-Symbol; keine Docker-Marke',path.with_name('README.md').read_text())
+        self.assertNotIn('🐳',path.read_text(encoding="utf-8"))
+        self.assertIn('Eigenes SSH-Updater-Container-Symbol; keine Docker-Marke',path.with_name('README.md').read_text(encoding="utf-8"))
 
     def test_container_group_painting_and_dynamic_labels_follow_theme(self):
         w=self.start_saved('colour')
