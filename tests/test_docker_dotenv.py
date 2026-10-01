@@ -334,10 +334,114 @@ class DotenvTests(unittest.IsolatedAsyncioTestCase):
 
 
 class LocalPolicyTests(unittest.TestCase):
+    # Independent expectations: changes to the builder must not silently change
+    # the security contract asserted by these tests.
+    infrastructure_keys = (
+        'HOME', 'PATH', 'DOCKER_CONFIG', 'DOCKER_CONTEXT', 'DOCKER_HOST',
+        'DOCKER_TLS', 'DOCKER_TLS_VERIFY', 'DOCKER_CERT_PATH', 'DOCKER_API_VERSION',
+        'DOCKER_CUSTOM_HEADERS', 'DOCKER_DEFAULT_PLATFORM',
+        'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'SSH_AUTH_SOCK',
+        'HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY',
+        'http_proxy', 'https_proxy', 'no_proxy', 'all_proxy',
+        'SSL_CERT_FILE', 'SSL_CERT_DIR',
+    )
+    controls = (
+        'COMPOSE_FILE=', 'COMPOSE_PROJECT_NAME=', 'COMPOSE_PROFILES=',
+        'COMPOSE_ENV_FILES=', 'COMPOSE_DISABLE_ENV_FILE=1', 'COMPOSE_PATH_SEPARATOR=:',
+        'COMPOSE_CONVERT_WINDOWS_PATHS=0', 'COMPOSE_IGNORE_ORPHANS=0',
+        'COMPOSE_REMOVE_ORPHANS=0', 'COMPOSE_PARALLEL_LIMIT=1',
+        'COMPOSE_ANSI=never', 'COMPOSE_STATUS_STDOUT=0', 'COMPOSE_PROGRESS=quiet',
+        'COMPOSE_MENU=0', 'COMPOSE_EXPERIMENTAL=0', 'COMPOSE_BAKE=false',
+        'COMPOSE_COMPATIBILITY=0',
+    )
+    operations = (
+        ['config', '--format', 'json', '--no-env-resolution'],
+        ['pull', '--policy', 'always', '--quiet', '--', 'web'],
+        ['up', '-d', '--no-deps', '--pull', 'never', '--no-build', '--', 'web'],
+    )
+
+    def assert_remote_policy(self, command, operation, remote):
+        """Check the complete generated grammar before modelling POSIX expansion.
+
+        This is deliberately not a general shell interpreter. Only the exact
+        quoted positional-argument construction and fixed env -i form are valid.
+        A plain dict models Linux's case-sensitive environment on every OS.
+        """
+        self.assertEqual(command[:2], ['sh', '-c'])
+        self.assertEqual(command[3:], ['ssh-updater-dotenv-' + operation[0]])
+        lines = command[2].splitlines()
+        expected_args = ['--project-name', 'test', '--project-directory', '/srv/test',
+                         '--env-file', '/srv/test/.env', '-f', '/srv/test/compose.yaml', *operation]
+        self.assertEqual(lines[0], 'set -- ' + shlex.join(expected_args))
+        self.assertEqual(lines[1], 'set -- docker compose "$@"')
+        assignments = [f'set -- "{key}=${{{key}-}}" "$@"' for key in self.infrastructure_keys]
+        self.assertEqual(lines[2:-1], assignments)
+        self.assertEqual(lines[-1], 'exec env -i ' + shlex.join(self.controls) + ' "$@"')
+        # Each validated assignment prepends one argument; env -i starts empty.
+        effective = {}
+        for key in reversed(self.infrastructure_keys):
+            effective[key] = remote.get(key, '')
+        effective.update(value.split('=', 1) for value in self.controls)
+        self.assertNotIn(SECRET, repr(command) + repr(effective))
+        return effective
+
+    def assert_all_remote_operations(self):
+        infrastructure = {key: 'synthetic-' + key for key in self.infrastructure_keys}
+        infrastructure['PATH'] = '/synthetic/bin:/usr/bin:/bin'
+        controls = dict(value.split('=', 1) for value in self.controls)
+        for operation in self.operations:
+            for missing in (False, True):
+                with self.subTest(operation=operation[0], missing=missing):
+                    expected = dict(infrastructure)
+                    if missing:
+                        for key in ('HOME', 'DOCKER_HOST', 'XDG_CONFIG_HOME', 'http_proxy'):
+                            expected.pop(key)
+                    remote = dict(expected, IMAGE_TAG=SECRET, TEST_MESSAGE=SECRET,
+                                  UNRELATED_SECRET=SECRET, COMPOSE_FAKE_FUTURE_CONTROL=SECRET)
+                    remote.update({key: SECRET for key in controls})
+                    command = contexts.operation_command('test', fixtures.PATH, DOTENV, operation)
+                    effective = self.assert_remote_policy(command, operation, remote)
+                    self.assertEqual(effective, dict(
+                        {key: expected.get(key, '') for key in self.infrastructure_keys}, **controls))
+                    for key in ('IMAGE_TAG', 'TEST_MESSAGE', 'UNRELATED_SECRET', 'COMPOSE_FAKE_FUTURE_CONTROL'):
+                        self.assertNotIn(key, effective)
+                    if not missing:
+                        for upper in ('HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'ALL_PROXY'):
+                            self.assertEqual(effective[upper], 'synthetic-' + upper)
+                            self.assertEqual(effective[upper.lower()], 'synthetic-' + upper.lower())
+                            self.assertNotEqual(effective[upper], effective[upper.lower()])
+
+    def test_structural_policy_rejects_broken_builders(self):
+        # Negative controls exercise the same oracle used on Windows and POSIX.
+        for operation in self.operations:
+            good = contexts.operation_command('test', fixtures.PATH, DOTENV, operation)
+            wrong_operation = dict(config='config --environment', pull='pull --quiet -- other',
+                                   up='up -d --pull always --build -- other')[operation[0]]
+            original_tail = shlex.join(operation)
+            mutations = (
+                good[2].replace('--env-file /srv/test/.env', '--env-file /foreign/.env'),
+                good[2].replace('exec env -i ', 'exec env '),
+                good[2].replace('exec env -i ', 'set -- "IMAGE_TAG=${IMAGE_TAG-}" "$@"\nexec env -i '),
+                good[2].replace('COMPOSE_PROFILES=', 'COMPOSE_PROFILES=hidden'),
+                good[2].replace('COMPOSE_ENV_FILES= ', ''),
+                good[2].replace(original_tail, wrong_operation, 1),
+            )
+            for index, script in enumerate(mutations):
+                with self.subTest(operation=operation[0], mutation=index):
+                    self.assertNotEqual(script, good[2])
+                    broken = [*good[:2], script, *good[3:]]
+                    with self.assertRaises(AssertionError):
+                        self.assert_remote_policy(broken, operation, {'IMAGE_TAG': SECRET})
+
     def test_real_shell_removes_application_values_preserves_infrastructure_and_pins_controls(self):
+        self.assert_all_remote_operations()
+        # Windows has completed the full structural security check above.
+        # Native Windows Python is not an oracle for a Linux exec environment.
+        if os.name != 'posix':
+            return
         with tempfile.TemporaryDirectory(prefix='dotenv-policy-') as tmp:
             docker = Path(tmp) / 'docker'
-            infrastructure = {key: 'synthetic-'+key for key in contexts.INFRASTRUCTURE}
+            infrastructure = {key: 'synthetic-'+key for key in self.infrastructure_keys}
             infrastructure['PATH'] = tmp + ':/usr/bin:/bin'
             # A local executable verifies the actual exec environment and argv.
             # It does not parse .env and never contacts Docker or prints an env dump.
@@ -348,7 +452,7 @@ class LocalPolicyTests(unittest.TestCase):
                       'assert "COMPOSE_FAKE_FUTURE_CONTROL" not in os.environ\n'
                       'expected = ' + repr(infrastructure) + '\n'
                       'assert all(os.environ[k] == v for k,v in expected.items())\n'
-                      'controls = ' + repr(dict(v.split('=', 1) for v in contexts.CONTROLS)) + '\n'
+                      'controls = ' + repr(dict(v.split('=', 1) for v in self.controls)) + '\n'
                       'assert all(os.environ[k] == v for k,v in controls.items())\n'
                       'assert sys.argv[1] == "compose"\n'
                       'assert sys.argv[sys.argv.index("--env-file")+1] == "/srv/test/.env"\n'
@@ -359,7 +463,7 @@ class LocalPolicyTests(unittest.TestCase):
                       '["pull", "--policy", "always", "--quiet", "--", "web"], '
                       '["up", "-d", "--no-deps", "--pull", "never", "--no-build", "--", "web"]]\n'
                       'print(json.dumps({"services": {"web": {"image": "nginx:1.28-alpine"}}}))\n')
-            docker.write_text(script)
+            docker.write_text(script, encoding="utf-8")
             docker.chmod(0o700)
             environment = dict(infrastructure, IMAGE_TAG='B', TEST_MESSAGE=SECRET, UNRELATED_SECRET=SECRET,
                                COMPOSE_FILE='/override.yaml', COMPOSE_PROFILES='hidden',
@@ -376,6 +480,31 @@ class LocalPolicyTests(unittest.TestCase):
                     self.assertNotIn(SECRET, repr(command) + result.stdout + result.stderr)
 
     def test_probe_requires_local_regular_canonical_file(self):
+        # Remote paths are POSIX strings even when the application runs on Windows.
+        expected_script = '''
+if [ ! -e "$1/.env" ] && [ ! -L "$1/.env" ]; then
+    printf EMPTY_CONTEXT
+    exit 0
+fi
+[ -f "$1/.env" ] && [ -r "$1/.env" ] && [ ! -L "$1/.env" ] || exit 1
+[ "$(realpath -e -- "$1")" = "$1" ] || exit 1
+[ "$(realpath -e -- "$2")" = "$2" ] || exit 1
+[ "$(realpath -e -- "$1/.env")" = "$1/.env" ] || exit 1
+printf PROJECT_DOTENV_CONTEXT
+'''
+        for root in ('/srv/example', '/srv/project with spaces'):
+            path = root + '/compose.yaml'
+            context = (contexts.PROJECT_DOTENV_CONTEXT, root + '/.env')
+            self.assertEqual(contexts.probe_command(path),
+                             ['sh', '-c', expected_script, 'ssh-updater-context', root, path])
+            self.assertTrue(contexts.valid_context((path,), context))
+            self.assertFalse(contexts.valid_context((path,),
+                             (contexts.PROJECT_DOTENV_CONTEXT, '/external/.env')))
+        windows_path = r'C:\synthetic\example\compose.yaml'
+        self.assertFalse(contexts.valid_context((windows_path,),
+                         (contexts.PROJECT_DOTENV_CONTEXT, '/srv/example/.env')))
+        if os.name != 'posix':
+            return  # Structural probe contract checked; no Windows filesystem surrogate.
         with tempfile.TemporaryDirectory(prefix='dotenv-path-') as tmp:
             root = Path(tmp)
             compose = root / 'compose.yaml'

@@ -10,7 +10,7 @@ LANs. Es verbindet eine Mehrhostübersicht, Paketprüfung und Systemupdates,
 SSH-/Host-Key-Prüfung, Docker-/Compose-Unterstützung und lokale Offline-Hilfe.
 Auch per SSH erreichbare VMs und Container können als Hosts verwaltet werden.
 
-Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta4**
+Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta5**
 [English README](README_EN.md)
 
 ## Features
