@@ -18,10 +18,12 @@ Das geladene Image wird sowohl über den konfigurierten Tag als auch über die
 beim Pull bestätigte lokale Image-ID inspiziert. Beide müssen exakt die
 festgehaltene ID, Plattform und den gegebenenfalls vorhandenen typisierten
 Descriptor liefern. Der alte Preflight-Erfolg wird nicht wiederverwendet.
-Die gemeinsame Compose-Kontextprüfung akzeptiert das Environment-Label fehlend,
+Für `EMPTY_CONTEXT` akzeptiert die gemeinsame Prüfung das Environment-Label fehlend,
 leer oder exakt `/dev/null`. Damit wird der eigene bewusst leere
-`--env-file /dev/null`-Kontext auch nach Container-Neuerstellung erkannt;
-andere Environment-Dateien bleiben ausgeschlossen.
+`--env-file /dev/null`-Kontext auch nach Container-Neuerstellung erkannt.
+Für `PROJECT_DOTENV_CONTEXT` ist zusätzlich exakt die gebundene lokale Standard-
+`.env` zulässig; fremde oder mehrere Environment-Dateien bleiben ausgeschlossen.
+Kontextart und `.env`-Pfad müssen vor und nach Apply zum Plan passen.
 
 Vor jedem Projekt erfolgen ein neuer Precheck und die bestehende Prüfung des
 Host-Verbindungskontexts. Abweichungen erlauben keinen Up-Aufruf für dieses
@@ -30,9 +32,19 @@ weitere Applies stoppen beim ersten Fehler. Keine atomare Mehrhost-Transaktion.
 
 ## Einziger verändernder Apply-Befehl
 
+Für `EMPTY_CONTEXT` unverändert:
+
 ```text
 env COMPOSE_PARALLEL_LIMIT=1 COMPOSE_PROFILES= COMPOSE_ENV_FILES= COMPOSE_DISABLE_ENV_FILE=1 docker compose --project-name <Projekt> --project-directory <Verzeichnis> --env-file /dev/null -f <Compose-Pfad> up -d --no-deps --pull never --no-build -- <vorbereitete Services>
 ```
+
+`PROJECT_DOTENV_CONTEXT` verwendet dieselbe restriktive `up`-Operation mit dem
+gebundenen lokalen `.env`-Pfad und exakt der kontrollierten Environment-Policy
+der Config-Auflösung und des Pulls. Der vollständige Live-Precheck vergleicht
+auch deren wirksamen Config-Hash. Nach Apply wird die effektive Config erneut
+geprüft; Kontextart und Pfad werden im Apply-Bericht an Verification übergeben.
+Keine eingefrorenen Dateien oder Locks: Änderungen während eines bereits
+laufenden Compose-Befehls werden nicht atomar verhindert.
 
 Die Services werden aus den bestätigten Pull-Ergebnissen und dem ursprünglichen
 unveränderlichen Plan ermittelt; vollständige Übereinstimmung ist erforderlich.

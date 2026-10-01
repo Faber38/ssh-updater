@@ -7,7 +7,7 @@ import shlex
 from . import docker_preflight as preflight, docker_image_updates as images
 from .remote_process import capture, RemoteTimeoutError
 from .ssh_connection import connect_host
-from ..docker_plan import proven
+from ..docker_plan import proven, project_eligible
 
 PULL_TIMEOUT = 1800
 
@@ -60,6 +60,7 @@ class PullRun:
             for candidate in self.plan.candidates:
                 expected = next(p for p in self.plan.selection if (p.host_id, p.name) == (candidate.host_id, candidate.name))
                 if (not candidate.images or candidate != replace(expected, images=tuple(i for i in expected.images if proven(i)))
+                        or not project_eligible(expected.paths, expected.images, expected.compose_context, expected.compose_identity)
                         or any(i[5] != 'current' and not proven(i) for i in expected.images)):
                     return self.outcome('failed', preflight.MESSAGES['plan'], 'plan')
             self.progress('Docker-Preflight …')
@@ -88,9 +89,14 @@ class PullRun:
                         if len({(i[3], i[4]) for i in rows}) != 1:
                             raise preflight.PreflightFailure('plan')
                         ref, platform = rows[0][3:5]
-                        command = images.compose_command(candidate.name, candidate.paths[0])
-                        command.insert(1, 'COMPOSE_PARALLEL_LIMIT=1')
-                        command += ['pull', '--policy', 'always', '--quiet', '--', service]
+                        operation = ['pull', '--policy', 'always', '--quiet', '--', service]
+                        if candidate.compose_context == images.contexts.EMPTY:
+                            command = images.compose_command(candidate.name, candidate.paths[0])
+                            command.insert(1, 'COMPOSE_PARALLEL_LIMIT=1')
+                            command += operation
+                        else:
+                            command = images.contexts.operation_command(candidate.name, candidate.paths[0],
+                                                                         candidate.compose_context, operation)
                         row = dict(host_id=candidate.host_id, host=host.get('name') or str(candidate.host_id),
                                    project=candidate.name, service=service, image=ref, platform=platform,
                                    status='pulling', containers_before=before)

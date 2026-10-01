@@ -36,6 +36,14 @@ im Plan werden weder aktualisiert noch erneut abgefragt.
 
 ## Read-only-Befehle
 
+`verify_project()` unterstützt Standard-`.env`-Snapshots mit
+expliziter Kontextidentität und erneuter effektiver Config-Auflösung. Details
+und Prozesspolicy stehen in `docker-image-updates.md`. Diese Snapshots sind
+bei erfüllten bisherigen Image-/Eligibility-Regeln auch Pull-/Apply-Kandidaten.
+Vor jedem Pull und vor Apply wird der gebundene Kontext erneut verglichen;
+eine wirksame `.env`-Änderung invalidiert den alten Plan.
+Die folgenden Befehle beschreiben weiterhin `EMPTY_CONTEXT`.
+
 Die sichere Auflösung und lokale Inspektion aus `docker_image_updates.Checker`
 werden wiederverwendet:
 

@@ -5,6 +5,7 @@ from PyQt6 import QtCore, QtWidgets
 from .ui_docker import engine_version
 from .docker_plan import image_identity, project_eligible
 from .core.docker_image_updates import REASONS
+from .core.docker_context import EMPTY, PROJECT_DOTENV_CONTEXT
 
 
 STATUS_TEXT = {'current': '✓ aktuell', 'update_available': '↑ Image-Update',
@@ -16,7 +17,9 @@ def project_state(project):
     images = project.get('image_updates', {}).get('images') or []
     states = [image.get('status') for image in images]
     return {
-        'candidate': project_eligible(project.get('config_files'), tuple(image_identity(i) for i in images)),
+        'candidate': project_eligible(project.get('config_files'), tuple(image_identity(i) for i in images),
+                                      tuple(project.get('image_updates', {}).get('compose_context', EMPTY)),
+                                      tuple(project.get('image_updates', {}).get('compose_identity', ()))),
         'updates': states.count('update_available'),
         'current': bool(states) and all(s == 'current' for s in states),
         'incomplete': not states or any(s not in STATUS_TEXT or s == 'uncheckable' for s in states),
@@ -28,10 +31,13 @@ def project_state(project):
 def description(host, project):
     state = project_state(project)
     check = project.get('image_updates', {})
+    dotenv = next(iter(check.get('compose_context', EMPTY)), None) == PROJECT_DOTENV_CONTEXT
     lines = [f"Host: {host['name']}", f"Projekt: {project['name']}",
              f"Compose-Pfade: {project.get('config_files_raw') or ', '.join(project.get('config_files') or []) or '—'}",
              f"Prüfzeit: {check.get('checked_at') or 'Nicht verfügbar'}",
              f"Status: {check.get('summary') or 'Nicht geprüft'}", '']
+    if dotenv:
+        lines.append('Standard-.env erkannt; der Kontext wird vor Pull und Apply erneut geprüft.')
     if state['current']:
         lines.append('Keine Aktualisierung erforderlich.')
     if state['incomplete']:

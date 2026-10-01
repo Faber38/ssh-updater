@@ -10,7 +10,7 @@ LANs. Es verbindet eine Mehrhostübersicht, Paketprüfung und Systemupdates,
 SSH-/Host-Key-Prüfung, Docker-/Compose-Unterstützung und lokale Offline-Hilfe.
 Auch per SSH erreichbare VMs und Container können als Hosts verwaltet werden.
 
-Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta3**
+Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta4**
 [English README](README_EN.md)
 
 ## Features
@@ -134,9 +134,12 @@ Updatezustände.
 
 Docker Engine, Compose und Buildx für Registry-Metadatenprüfungen müssen für den
 SSH-Benutzer nichtinteraktiv verfügbar sein. Compose wird bewusst konservativ
-unterstützt: eine eindeutige statische lokale Datei und geeignete `image:`-
-Referenzen. Overrides, Includes, Profiles und Environment-Interpolation werden
-nicht allgemein unterstützt. Genaue Grenzen stehen in Hilfe und Technikdokumenten.
+unterstützt: eine eindeutige lokale Compose-Datei und geeignete `image:`-
+Referenzen, auch mit normaler lokaler Projekt-`.env` im selben Verzeichnis.
+Externe/mehrere Env-Dateien, Service-`env_file`, Shell-Anwendungsvariablen sowie
+Overrides, Includes, Extends, Profile und komplexe Interpolation bleiben
+ausgeschlossen. Details stehen in der Hilfe und den
+[technischen Docker-Dokumenten](docs/docker-image-updates.md).
 Swarm und Kubernetes gehören nicht zum normalen unterstützten Compose-Updatepfad.
 
 Keine automatische Auswahl höherer Tags, Compose-Dateiänderung, Änderung von

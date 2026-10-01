@@ -10,7 +10,7 @@ overview, package checks and system updates, SSH host-key verification,
 Docker/Compose support, and local offline help. SSH-accessible VMs and containers
 can also be managed as hosts.
 
-Stable release: **v1.2.4** · Current development version: **v1.2.5-beta3**
+Stable release: **v1.2.4** · Current development version: **v1.2.5-beta4**
 [Deutsche README](README.md)
 
 ## Features
@@ -132,9 +132,11 @@ application discards the cache and prepared update states.
 
 Docker Engine, Compose, and Buildx for registry metadata checks must be available
 to the SSH user noninteractively. Compose support is deliberately conservative:
-one unambiguous static local file and suitable `image:` references. Overrides,
-includes, profiles, and environment interpolation are not generally supported.
-See the in-app help and technical documentation for exact limits. Swarm and
+one unambiguous local Compose file and suitable `image:` references, including
+a normal local project `.env` in the same directory. External/multiple env files,
+service `env_file`, shell application variables, overrides, includes, extends,
+profiles, and complex interpolation remain excluded. See the in-app help and
+[technical Docker documentation](docs/docker-image-updates.md) for details. Swarm and
 Kubernetes are not supported as the normal Compose update path.
 
 No automatic higher-tag selection, Compose-file edits, digest-pin changes, local

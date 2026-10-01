@@ -119,6 +119,8 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(timeout, images.TIMEOUT)
         if args[:2] == ['cat', '--']:
             return 0, self.source, ''
+        if args[:3] == ['sh', '-c', images.contexts.CONTEXT_SCRIPT]:
+            return 0, images.contexts.EMPTY_CONTEXT, ''
         if args[:3] == ['docker', 'container', 'ls']:
             return 0, '\n'.join(c['Id'] for c in self.containers), ''
         if args[:3] == ['docker', 'container', 'inspect']:
@@ -309,7 +311,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['images'][0]['reason'], 'build_image')
 
     async def test_context_rejected_before_compose_or_registry(self):
-        for source in ['services: {web: {image: "${IMAGE}"}}', 'include: oci://example/config',
+        for source in ['services: {web: {image: "$IMAGE"}}', 'include: oci://example/config',
                        'services: {web: {extends: {file: other.yml}}}', 'profiles: [test]',
                        'env_file: secret.env', 'services: {web: {image: "nginx\\u003a1"}}']:
             with self.subTest(source=source):
@@ -389,6 +391,7 @@ class ProjectTests(unittest.IsolatedAsyncioTestCase):
                             [['docker', 'container', 'ls'], ['docker', 'container', 'inspect'],
                              ['docker', 'image', 'inspect'], ['docker', 'buildx', 'version']]
                             or command[:4] == ['docker', 'buildx', 'imagetools', 'inspect']
+                            or command == images.contexts.probe_command(PATH)
                             or (command[0] == 'env' and command[-5:] ==
                                 ['config', '--format', 'json', '--no-interpolate', '--no-env-resolution']))
         seen = []

@@ -13,6 +13,7 @@ import re
 import shlex
 
 from .remote_process import capture, RemoteTimeoutError
+from . import docker_context as contexts
 
 TIMEOUT = 20
 TOTAL_TIMEOUT = 180
@@ -28,7 +29,8 @@ DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 LABEL = 'com.docker.compose.'
 
 REASONS = {
-    'context': 'Compose-Kontext nicht eindeutig rekonstruierbar (unterstützt wird eine statische lokale Datei ohne Overrides, Interpolation oder Profile).',
+    'context': 'Compose-Kontext nicht eindeutig rekonstruierbar (eine lokale Datei, leerer Kontext oder Standard-.env; keine Overrides, indirekten Quellen oder Profile).',
+    'config': 'Die wirksame Compose-Konfiguration hat sich während der Prüfung geändert.',
     'buildx_missing': 'Docker Buildx ist nicht verfügbar oder konnte nicht gestartet werden.',
     'auth': 'Registry-Authentifizierung oder Leseberechtigung fehlt; vorhandenen Registry-Zugang am Host prüfen.',
     'not_found': 'Image oder Tag in der Registry nicht gefunden.',
@@ -262,8 +264,9 @@ class Checker:
         self.registry = {}
         self.local = {}
         self.buildx = None
+        self.context = contexts.EMPTY
 
-    async def run(self, args, *, parse=True):
+    async def run(self, args, *, parse=True, strict_stderr=False):
         command = shlex.join(args)
         try:
             code, out, err = await capture(self.conn, command, TIMEOUT)
@@ -274,6 +277,9 @@ class Checker:
         if code:
             # Do not retain stderr: registry URLs/helper errors can contain secrets.
             raise CheckFailure(failure_kind(code, err or out), command, code)
+        if strict_stderr and err.strip():
+            # Includes Compose's unset-variable warnings. Never retain raw values.
+            raise CheckFailure('context')
         if not parse:
             return out
         try:
@@ -387,8 +393,10 @@ class Checker:
         # Conservative admission gate only, NOT a YAML interpreter. Compose does
         # all parsing. Reject indirection before config can fetch remote includes.
         source = await self.run(['cat', '--', path], parse=False)
-        if (any(c in source for c in ('$','\\','!', '&', '*', '%'))
+        if (any(c in source for c in ('\\','!', '&', '*', '%'))
                 or re.search(r'include|extends|profiles|env_file|provider|models|pre_start|post_start|pre_stop', source, re.I)):
+            raise CheckFailure('context')
+        if not contexts.interpolation_allowed(source):
             raise CheckFailure('context')
         ids_text = await self.run(['docker', 'container', 'ls', '--quiet', '--no-trunc',
                                   '--filter', f'label={LABEL}project={name}'], parse=False)
@@ -403,28 +411,67 @@ class Checker:
         if not isinstance(containers, list) or len(containers) != len(ids):
             raise CheckFailure('invalid_output')
         by_service = {}
+        environment_labels = set()
         for container in containers:
             labels = container.get('Config', {}).get('Labels') or {}
             if (container.get('Id') not in ids or not container.get('State', {}).get('Running')
                     or labels.get(LABEL + 'project') != name
                     or labels.get(LABEL + 'project.config_files') != path
                     or labels.get(LABEL + 'project.working_dir') != workdir
-                    # Our explicit --env-file /dev/null is a known empty context.
-                    or labels.get(LABEL + 'project.environment_file') not in (None, '', '/dev/null')
+                    or labels.get(LABEL + 'project.environment_file') not in (None, '', '/dev/null', workdir + '/.env')
                     or labels.get(LABEL + 'oneoff', 'False').lower() != 'false'):
                 raise CheckFailure('context')
             service = labels.get(LABEL + 'service')
             if not service:
                 raise CheckFailure('context')
             by_service.setdefault(service, []).append(container)
-        config = await self.run(compose_command(name, path) +
-                                ['config', '--format', 'json', '--no-interpolate', '--no-env-resolution'])
+            environment_labels.add(labels.get(LABEL + 'project.environment_file') or '')
+        self.context = contexts.EMPTY
+        if '/dev/null' in environment_labels:
+            if environment_labels - {'', '/dev/null'}:
+                raise CheckFailure('context')
+        else:
+            try:
+                kind = await self.run(contexts.probe_command(path), parse=False)
+            except CheckFailure:
+                raise CheckFailure('context') from None
+            if kind == contexts.PROJECT_DOTENV_CONTEXT:
+                self.context = (kind, workdir + '/.env')
+            elif kind != contexts.EMPTY_CONTEXT or workdir + '/.env' in environment_labels:
+                raise CheckFailure('context')
+        if self.context == contexts.EMPTY and '$' in source:
+            raise CheckFailure('context')
+        config = await self.resolved_config(name, path)
         services = config.get('services')
         if not isinstance(services, dict) or not services or not set(by_service) <= set(services):
             raise CheckFailure('context')
         if len(services) > MAX_CONTAINERS:
             raise CheckFailure('limit')
+        if self.context != contexts.EMPTY:
+            for spec in services.values():
+                if not isinstance(spec, dict) or spec.get('profiles') or spec.get('env_file'):
+                    raise CheckFailure('context')
+                environment = spec.get('environment', {})
+                if (not isinstance(environment, dict)
+                        or any(value is None or key in contexts.INFRASTRUCTURE
+                               or key.startswith(('COMPOSE_', 'DOCKER_'))
+                               for key, value in environment.items())):
+                    # No unresolved/pass-through infrastructure environment.
+                    raise CheckFailure('context')
         return path, source, config, by_service
+
+    async def resolved_config(self, name, path):
+        if self.context == contexts.EMPTY:
+            return await self.run(compose_command(name, path) +
+                                  ['config', '--format', 'json', '--no-interpolate', '--no-env-resolution'])
+        return await self.run(contexts.config_command(name, path, self.context), strict_stderr=True)
+
+    async def verify_config(self, name, path, source, config):
+        """Recheck effective dotenv config, not dotenv bytes/comments/unused keys."""
+        if self.context != contexts.EMPTY:
+            if (await self.run(contexts.probe_command(path), parse=False) != contexts.PROJECT_DOTENV_CONTEXT
+                    or compose_identity(source, await self.resolved_config(name, path)) != compose_identity(source, config)):
+                raise CheckFailure('config')
 
     async def _project(self, project):
         path, source, config, by_service = await self.resolve_project(project)
@@ -441,8 +488,10 @@ class Checker:
         # Detect a concurrent Compose file edit; do not publish a stale conclusion.
         if await self.run(['cat', '--', path], parse=False) != source:
             raise CheckFailure('context')
+        await self.verify_config(project['name'], path, source, config)
         result = project_result(results)
         result['compose_identity'] = compose_identity(source, config)
+        result['compose_context'] = self.context
         return result
 
 

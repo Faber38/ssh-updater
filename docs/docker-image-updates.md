@@ -37,10 +37,12 @@ Neuladen unveränderter Hosts erhält sie; neue Prüfung, gelöschte Hosts oder
 geänderte Verbindungs-/Authentifizierungsdaten verwerfen sie. Kein DB-Schema,
 keine zusätzlichen DB-Schreibvorgänge, keine QSettings-Persistenz.
 
-## Ausschließlich verwendete zusätzliche Befehle
+## Befehle des EMPTY_CONTEXT
 
 Alle variablen Argumente werden mit `shlex.join()` für den Remote-Aufruf
 gequotet. Image-Referenzen und Container-/Image-IDs werden zusätzlich validiert.
+Der Standard-`.env`-Kontext verwendet die unten beschriebene lesende Kontextprüfung und einen separaten
+Config-Aufruf für `PROJECT_DOTENV_CONTEXT`.
 
 1. `cat -- <absoluter Compose-Pfad>`: konservative Vorprüfung der Quelldatei;
    am Projektende erneut gelesen, um zwischenzeitliche Änderungen zu erkennen.
@@ -60,6 +62,84 @@ Keine Befehle zum Pull, Build, Erstellen, Löschen, Starten, Stoppen oder
 Neustarten von Images/Containern/Stacks werden aufgerufen.
 
 ## Bewusst enger Compose-Kontext
+
+### PROJECT_DOTENV_CONTEXT
+
+Dieser Kontext unterstützt genau `<kanonisches Projektverzeichnis>/.env`:
+eine lesbare reguläre Datei ohne Symlinks, geprüft mit `sh`/`realpath -e`.
+Projektverzeichnis und einzelne Compose-Datei müssen den Containerlabels
+entsprechen. Fehlendes/leeres Environment-Label oder exakt der lokale absolute
+`.env`-Pfad sind erlaubt. Ein `/dev/null`-Label bleibt ausdrücklich leerer
+Kontext; widersprüchliche explizite Labels werden abgelehnt.
+
+`docker_context.config_command()` bindet diese Datei explizit per `--env-file`
+und verwendet `config --format json --no-env-resolution`. Compose übernimmt
+Parsing/Interpolation. Kein eigener Dotenv-Parser, kein Lesen der `.env` durch
+SSH Updater. Einfache `${NAME}`-Ausdrücke und escapte `$$`-Paare sind zulässig; die übrigen
+Textschranken bleiben bestehen. Stderr-Warnungen (auch fehlende Variablen) und
+unaufgelöste Environment-Einträge scheitern mit festen, wertfreien Meldungen.
+`$$` ist ausschließlich Quelltext-Escape, kein zusätzlicher Environment-Eingang;
+auch `$$$$` wird als zwei Escape-Paare behandelt. Einzelne verbleibende Dollarzeichen,
+`$NAME`, Default-/Fehleroperatoren und verschachtelte Interpolation bleiben gesperrt.
+`--no-env-resolution` unterbindet Service-`env_file`-Auflösung, nicht die
+Interpolation der Compose-Datei aus der explizit gebundenen Standard-`.env`.
+
+Weiterhin ausgeschlossen sind externe/mehrere Env-Dateien, Service-`env_file`,
+mehrere Compose-Dateien/Overrides, Includes, Extends, Profile, provider, models
+und die bereits gesperrten Lifecycle-Hooks. Die konservative Textschranke des
+leeren Kontexts gilt ebenfalls, mit der gezielten Ausnahme für `${NAME}` und `$$`.
+Lokale Builds und Digest-Pinning werden dadurch nicht zu automatischen
+Updatekandidaten.
+
+Der Compose-Prozess erhält mittels `env -i` nur die feste Infrastruktur-Allowlist
+`docker_context.INFRASTRUCTURE`: HOME/PATH, Docker-Kontext/Auth/TLS/Endpoint/API/
+Plattform/Header, XDG-Pfade, SSH_AUTH_SOCK, Proxy-/Zertifikatseinstellungen.
+Fehlende Infrastrukturwerte werden leer gebunden. Beliebige SSH-Anwendungswerte
+werden entfernt. Infrastruktur-Namen sowie COMPOSE_/DOCKER_-Namen werden als
+direkte Interpolationsvariablen und Service-Environment-Schlüssel abgelehnt.
+Referenzen innerhalb der `.env` interpretiert ausschließlich Compose; deren
+vollständiger Abhängigkeitsgraph wird nicht selbst analysiert.
+`CONTROLS` neutralisiert bekannte Compose-Steuerungen, insbesondere COMPOSE_FILE,
+COMPOSE_PROFILES und COMPOSE_ENV_FILES. CLI-Projektname, `-f` und Projektverzeichnis
+bleiben explizit. Weder Prozesswerte noch Environment-Dumps werden zurückgegeben.
+
+Die Identität bleibt Compose-Quellhash, vollständiger kanonisierter Config-Hash
+und Service/Image/Plattform-Bindungen; hinzu kommen Kontextart und `.env`-Pfad.
+Kein `.env`-Hash, keine Environment-Werte in Ergebnissen/Plan/GUI/Logs/DB.
+Die potenziell geheime Config wird über SSH nur temporär im RAM verarbeitet.
+Normale Prüfung und `verify_project()` lösen abschließend erneut auf. Wirksame
+A→B-Änderungen invalidieren den alten Snapshot; Kommentare/unbenutzte Werte
+ohne Config-Wirkung nicht. Eine neue Prüfung darf B aufnehmen: Historische
+Startumgebungen sind aus Labels nicht beweisbar; kein vollständiger Vergleich
+gegen die Container-Environment und keine atomare Garantie bei parallelen Edits.
+
+Die Planbildung gibt diesen Kontext für den bestehenden Updatezyklus frei, wenn Pfadbindung,
+Compose-Identität und sämtliche bisherigen Image-/Eligibility-Regeln passen.
+Kontextart und kanonischer `.env`-Pfad bleiben im immutable Plan und im
+Apply-Bericht gebunden. Kandidaten müssen weiterhin exakt den belegten
+Update-Services des ursprünglichen Snapshots entsprechen.
+
+Vor jedem gezielten Pull und vor jedem Apply verifiziert `verify_project()`
+erneut Quelle, effektive Config, Kontext, Bindungen und Containeridentitäten.
+Wirksame `.env`-Drift stoppt den nächsten verändernden Schritt. Pull und Apply
+verwenden `docker_context.operation_command()` mit derselben Infrastruktur-Allowlist,
+COMPOSE-Steuerung und denselben expliziten Pfaden wie `config`. Zugelassen sind
+nur `pull --policy always --quiet -- <Service>` und
+`up -d --no-deps --pull never --no-build -- <Services>`.
+Nachkontrolle und Abschlussverifikation vergleichen ebenfalls Kontext und
+Config-Identität; das selbst erzeugte lokale `.env`-Label wird wieder erkannt.
+
+Es gibt keine temporären Compose-/Env-Kopien, Locks oder neue Transaktionen.
+Eine externe Änderung exakt während eines Compose-Aufrufs wird nicht atomar
+verhindert; die Garantie entspricht dem bisherigen Compose-Datei-Modell.
+Containerkontrollen, Teilfehler-/Abbruchverhalten, Registry-Cache und Backoff
+bleiben erhalten. Die lokale Shell-Policy wird mit einem Testexecutable für
+Config, Pull und Apply geprüft. Der reale Standard-`.env`-Updatezyklus mit Compose 5.5.1 wurde erfolgreich
+bestätigt: Erkennung, Tagvergleich, Vorschau, Live-Preflight, Pull ohne
+Containerwechsel, Apply mit neuem laufendem Container und anschließende normale
+Prüfung. Die gesonderte Abschlussverifikation ist durch lokale Tests abgedeckt.
+
+### EMPTY_CONTEXT
 
 Die Auflösung unterstützt genau eine absolute, eindeutig angegebene lokale
 Compose-Datei. Der Discovery-Pfad und die Containerlabels müssen übereinstimmen.

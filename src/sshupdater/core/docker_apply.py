@@ -9,7 +9,7 @@ from . import docker_preflight as preflight, docker_image_updates as images
 from .docker_pull import container_snapshot
 from .remote_process import capture
 from .ssh_connection import connect_host
-from ..docker_plan import proven
+from ..docker_plan import proven, project_eligible
 
 APPLY_TIMEOUT = 600
 
@@ -26,6 +26,7 @@ def prepared(state):
     for candidate in plan.candidates:
         original = next((p for p in plan.selection if (p.host_id, p.name) == (candidate.host_id, candidate.name)), None)
         if (original is None or not candidate.images
+                or not project_eligible(original.paths, original.images, original.compose_context, original.compose_identity)
                 or candidate != replace(original, images=tuple(i for i in original.images if proven(i)))):
             return False
         expected.update((candidate.host_id, candidate.name, i[0], i[3], i[4]) for i in candidate.images)
@@ -94,7 +95,8 @@ async def verify_applied(conn, expected, candidate, rows):
     checker = images.Checker(conn)
     project = dict(name=candidate.name, config_files=list(candidate.paths), config_files_raw=candidate.raw_paths)
     path, source, config, services = await checker.resolve_project(project)
-    if images.compose_identity(source, config) != expected.compose_identity:
+    if (checker.context != expected.compose_context
+            or images.compose_identity(source, config) != expected.compose_identity):
         raise preflight.PreflightFailure('config')
     observed = await observe(checker, candidate)
     applied = []
@@ -127,6 +129,7 @@ async def verify_applied(conn, expected, candidate, rows):
             raise preflight.PreflightFailure('container')
     if await checker.run(['cat', '--', path], parse=False) != source:
         raise preflight.PreflightFailure('file')
+    await checker.verify_config(candidate.name, path, source, config)
     return applied
 
 
@@ -169,6 +172,7 @@ class ApplyRun:
                 row = dict(host_id=candidate.host_id, project=candidate.name,
                            connection=candidate.connection, paths=candidate.paths,
                            compose_identity=candidate.compose_identity,
+                           compose_context=candidate.compose_context,
                            services=sorted({r['service'] for r in rows}), status='precheck')
                 self.applies.append(row)
                 async with connect_host(host) as conn:
@@ -176,9 +180,14 @@ class ApplyRun:
                     async with asyncio.timeout(preflight.TOTAL_TIMEOUT):
                         await verify_prepared(conn, expected, rows)
                     preflight.db.get_connection_context(host)
-                    cmd = images.compose_command(candidate.name, candidate.paths[0])
-                    cmd.insert(1, 'COMPOSE_PARALLEL_LIMIT=1')
-                    cmd += ['up', '-d', '--no-deps', '--pull', 'never', '--no-build', '--', *row['services']]
+                    operation = ['up', '-d', '--no-deps', '--pull', 'never', '--no-build', '--', *row['services']]
+                    if candidate.compose_context == images.contexts.EMPTY:
+                        cmd = images.compose_command(candidate.name, candidate.paths[0])
+                        cmd.insert(1, 'COMPOSE_PARALLEL_LIMIT=1')
+                        cmd += operation
+                    else:
+                        cmd = images.contexts.operation_command(candidate.name, candidate.paths[0],
+                                                               candidate.compose_context, operation)
                     row['status'] = 'applying'
                     self.progress('Docker-Service wird angewendet …')
                     self.mutation_attempted = True

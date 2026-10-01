@@ -171,3 +171,18 @@ class HelpTests(unittest.TestCase):
         for child in dialog.topics['docker']['children']:
             self.assertIn(child['title'],docker)
         self.assertIn('Prüfen → Projekt auswählen',docker)
+
+    def test_standard_dotenv_support_and_limits_are_documented(self):
+        dialog = self.help(self.window())
+        body = dialog.topics['docker-limits']['body']
+        for fragment in ('Standard-Projekt-.env', '├── compose.yaml', '└── .env',
+                         'Compose selbst übernimmt Parsing und Interpolation',
+                         'keinen eigenen Dotenv-Parser', '${NAME}', '$$',
+                         'vor Pull und Apply erneut geprüft', 'nicht atomar verhindert',
+                         'nicht in Plan oder DB gespeichert', 'nicht in GUI oder Logs',
+                         'externe oder mehrere', 'Service-`env_file`',
+                         'Shell-basierte', 'Overrides', '`include`, `extends` und Profile',
+                         '/dev/null', 'Digest-Pins', 'Lokaler Build'):
+            with self.subTest(fragment=fragment):
+                self.assertIn(fragment, body)
+        self.assertNotIn('Die automatische Übernahme von `.env` ist deaktiviert.', body)

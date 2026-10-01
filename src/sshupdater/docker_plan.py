@@ -1,6 +1,7 @@
 """Immutable, RAM-only GUI approval identity. No execution or remote access."""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
+from .core.docker_context import EMPTY, valid_context
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,7 @@ class ProjectSnapshot:
     checked_at: str
     images: tuple
     compose_identity: tuple = ()
+    compose_context: tuple = EMPTY
 
 
 @dataclass(frozen=True)
@@ -43,7 +45,7 @@ def selection(hosts):
                 tuple(project.get('config_files') or []), project.get('config_files_raw'), project.get('status', ''),
                 check.get('checked_at', ''),
                 tuple(sorted((image_identity(i) for i in check.get('images', [])), key=repr)),
-                tuple(check.get('compose_identity', ()))))
+                tuple(check.get('compose_identity', ())), tuple(check.get('compose_context', EMPTY))))
     return tuple(sorted(projects, key=lambda p: (p.host_id, p.name)))
 
 
@@ -63,9 +65,13 @@ def proven(image):
 
 
 
-def project_eligible(paths, images):
+def project_eligible(paths, images, context=EMPTY, compose_identity=()):
     """Shared conservative project approval rule over snapshot identities."""
-    return bool(paths and images
+    if context != EMPTY and (len(compose_identity) != 3
+            or any(not isinstance(h, str) or not re.fullmatch(r'[0-9a-f]{64}', h) for h in compose_identity[:2])
+            or not compose_identity[2]):
+        return False
+    return bool(valid_context(paths, context) and paths and images
                 and all(i[5] == 'current' or proven(i) for i in images)
                 and any(proven(i) for i in images))
 
@@ -75,9 +81,6 @@ def build_plan(hosts):
     candidates = []
     for project in selected:
         # Phase 3 conservatively excludes projects with unresolved/build/pinned images.
-        if project_eligible(project.paths, project.images):
-            candidates.append(ProjectSnapshot(
-                project.host_id, project.connection, project.revision, project.name,
-                project.paths, project.raw_paths, project.status, project.checked_at,
-                tuple(i for i in project.images if proven(i)), project.compose_identity))
+        if project_eligible(project.paths, project.images, project.compose_context, project.compose_identity):
+            candidates.append(replace(project, images=tuple(i for i in project.images if proven(i))))
     return UpdatePlan(selected, tuple(candidates))

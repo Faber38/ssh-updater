@@ -50,6 +50,7 @@ class PreflightTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result['projects'][0]['platform'], 'linux/amd64')
         for args in self.commands:
             self.assertTrue(args[:2] == ['cat', '--'] or
+                            args == images.contexts.probe_command(fixtures.PATH) or
                             args[:3] in (['docker', 'container', 'ls'], ['docker', 'container', 'inspect'], ['docker', 'image', 'inspect']) or
                             (args[0] == 'env' and args[-5:] == ['config', '--format', 'json', '--no-interpolate', '--no-env-resolution']))
         self.assertFalse(any('buildx' in c for c in self.commands))

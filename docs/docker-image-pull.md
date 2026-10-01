@@ -14,9 +14,19 @@ geprüfte Compose-Datei wird über dieselbe explizite Kommando-Grundlage wie bei
 
 ## Einziger verändernder Docker-Befehl
 
+Für `EMPTY_CONTEXT` bleibt der bisherige Aufruf unverändert:
+
 ```text
 env COMPOSE_PARALLEL_LIMIT=1 COMPOSE_PROFILES= COMPOSE_ENV_FILES= COMPOSE_DISABLE_ENV_FILE=1 docker compose --project-name <Projekt> --project-directory <Verzeichnis> --env-file /dev/null -f <Compose-Pfad> pull --policy always --quiet -- <freigegebener Service>
 ```
+
+Für `PROJECT_DOTENV_CONTEXT` verwendet derselbe Pull die kontrollierte
+`env -i`-Policy aus [Compose-Kontext](docker-image-updates.md), einschließlich der festen
+Infrastruktur-Allowlist und COMPOSE-Neutralisierung, mit exakt dem im Plan
+gebundenen `--env-file <Projektverzeichnis>/.env`. Projektname, Verzeichnis,
+Compose-Datei und Serviceauswahl bleiben explizit. Keine `.env`-Werte werden
+im Plan oder Pull-Ergebnis gespeichert. Eine beim erneuten Live-Preflight
+festgestellte Config-/Kontextabweichung verhindert den Pull.
 
 Pro Service ein Aufruf: Dadurch sind abgeschlossene und fehlgeschlagene Pulls
 klar zuordenbar. Mehrere Replikate eines Service führen zu nur einem Pull.

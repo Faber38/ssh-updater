@@ -58,7 +58,8 @@ async def local_state(conn, applied):
     checker = images.Checker(conn)
     project = dict(name=applied['project'], config_files=list(applied['paths']))
     path, source, config, by_service = await checker.resolve_project(project)
-    if images.compose_identity(source, config) != applied['compose_identity']:
+    if (checker.context != applied.get('compose_context', images.contexts.EMPTY)
+            or images.compose_identity(source, config) != applied['compose_identity']):
         raise preflight.PreflightFailure('config')
     expected = applied.get('containers', [])
     if not expected or {c['service'] for c in expected} != set(applied['services']):
@@ -82,6 +83,7 @@ async def local_state(conn, applied):
             results.append(result)
     if await checker.run(['cat', '--', path], parse=False) != source:
         raise preflight.PreflightFailure('file')
+    await checker.verify_config(applied['project'], path, source, config)
     return project
 
 
@@ -136,6 +138,10 @@ class VerificationRun:
                             # A registry request can take time; check local identities again before publishing.
                             row.update(status='local_changed', note=LOCAL_NOTE)
                             await local_state(conn, applied)
+                            if (applied.get('compose_context', images.contexts.EMPTY) != images.contexts.EMPTY
+                                    and (checked.get('compose_context') != applied['compose_context']
+                                         or checked.get('compose_identity') != applied['compose_identity'])):
+                                raise preflight.PreflightFailure('config')
                             preflight.db.get_connection_context(host)
                             targets = [i for i in checked['images'] if i['service'] in applied['services']]
                             ids = {c['container_id'] for c in applied['containers']}

@@ -23,11 +23,20 @@ wiederholt, damit eine zwischenzeitliche Containeränderung keinen Abschluss
 begründet. Abweichungen bedeuten: Apply war erfolgreich, aktueller lokaler
 Zustand nicht mehr bestätigt. Keine Reparatur und kein erneuter Apply.
 
+Die Verifikation bindet auch Kontextart und kanonischen Standard-`.env`-Pfad aus
+dem Apply-Bericht. Die effektive Config wird mit derselben kontrollierten
+Environment-Policy erneut aufgelöst und gegen den freigegebenen Hash geprüft,
+auch am Ende der lokalen Kontrolle. Abweichende Kontext-/Config-Identitäten
+im abschließenden Image-Prüfergebnis dürfen ebenfalls nicht veröffentlicht werden.
+
 Ausschließlich read-only Befehle: `cat -- <Compose-Datei>`,
 `docker container ls`, `docker container inspect`, `docker image inspect`,
 explizites `docker compose ... config --format json --no-interpolate
 --no-env-resolution`, bei Bedarf `docker buildx version` und
 `docker buildx imagetools inspect <Referenz> --format '{{json .Manifest}}'`.
+Bei `PROJECT_DOTENV_CONTEXT` ersetzt der gebundene lokale `.env`-Pfad `/dev/null`
+und `--no-interpolate` entfällt; `--no-env-resolution` bleibt erhalten.
+Kein Environment-Dump und keine Config-Persistenz.
 
 ## Zulässige Registry-Snapshots
 

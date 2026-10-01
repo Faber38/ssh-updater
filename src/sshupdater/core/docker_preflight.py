@@ -53,6 +53,8 @@ async def verify_project(conn, expected):
             raise PreflightFailure('container') from None
         raise PreflightFailure('project') from None
     services = config['services']
+    if checker.context != expected.compose_context:
+        raise PreflightFailure('config')
     if config.get('name', expected.name) != expected.name:
         raise PreflightFailure('project')
     # Explicit bindings are compared before hashes to give a specific safe reason.
@@ -94,6 +96,10 @@ async def verify_project(conn, expected):
     # Detect edits during the preflight itself, using the same read as normal checks.
     if await checker.run(['cat', '--', path], parse=False) != source:
         raise PreflightFailure('file')
+    try:
+        await checker.verify_config(expected.name, path, source, config)
+    except images.CheckFailure:
+        raise PreflightFailure('config') from None
 
 
 async def preflight(plan, hosts):
