@@ -18,10 +18,13 @@ def auth_params(host):
                   gss_auth=False, gss_kex=False, gss_delegate_creds=False)
     if method == 'password':
         token = host.get('password_enc')
-        password = crypto.decrypt_host_password(token, host) if token is not None else None
-        if not password:
+        if token is None:
             raise OSError("Kein SSH-Passwort gespeichert. Bitte in der Konfiguration eingeben.")
-        params.update(password=password, client_keys=None, client_certs=[],
+        if credentials.version(token) != 2:
+            raise credentials.LegacyCredentialRequired()
+        # The Validator supplies the password only after the server key was
+        # accepted against the authenticated trust state.
+        params.update(password=None, client_keys=None, client_certs=[],
                       agent_path=None, pkcs11_provider=None, public_key_auth=False,
                       password_auth=True, kbdint_auth=True,
                       preferred_auth=['password', 'keyboard-interactive'])
@@ -37,7 +40,7 @@ def auth_params(host):
     return params
 
 
-def options_for(host, *, inspect=False, jump=False, config=()):
+def options_for(host, *, inspect=False, jump=False, config=None):
     params = auth_params(host) if not inspect else dict(
         client_keys=None, client_certs=[], agent_path=None, pkcs11_provider=None,
         password=None, public_key_auth=False, password_auth=False, kbdint_auth=False)
@@ -54,6 +57,11 @@ def options_for(host, *, inspect=False, jump=False, config=()):
         address, user, port = host['primary_ip'], host.get('user', ()), host.get('port', ())
     else:
         address, user, port = credentials.normalize_target(host)
+    # Production connections deliberately ignore the user's mutable OpenSSH
+    # config. Managed targets must not silently change HostName, HostKeyAlias,
+    # ProxyJump, ProxyCommand, username, or port behind the stored identity.
+    if config is None:
+        config = []
     options = asyncssh.SSHClientConnectionOptions(
         config=config, host=address,
         port=port, username=user,
@@ -80,7 +88,8 @@ def _jump_host(spec):
 
 
 @asynccontextmanager
-async def _open(options, requested, *, inspect=False, chain=(), tunnel=None):
+async def _open(options, requested, *, inspect=False, chain=(), tunnel=None,
+                credential_host=None):
     identity = (options.host, options.port)
     if identity in chain or len(chain) >= 8:
         raise OSError("Zyklische oder zu lange ProxyJump-Konfiguration.")
@@ -93,7 +102,8 @@ async def _open(options, requested, *, inspect=False, chain=(), tunnel=None):
                     jump_options, spec, chain=chain + (identity,), tunnel=tunnel))
         validator = host_keys.Validator(options.host_key_alias or options.host,
                                         options.port, requested, inspect=inspect,
-                                        address=options.host)
+                                        address=options.host,
+                                        credential_host=credential_host)
         conn = None
         try:
             conn = await asyncssh.connect(options.host, port=options.port,
@@ -126,7 +136,8 @@ async def connect_host(host):
         raise OSError(f"SSH-Konfiguration ungültig: {exc}") from exc
     async with AsyncExitStack() as stack:
         async with asyncio.timeout(CONNECT_TIMEOUT):
-            conn = await stack.enter_async_context(_open(options, host['primary_ip']))
+            conn = await stack.enter_async_context(_open(
+                options, host['primary_ip'], credential_host=host))
         yield conn
 
 

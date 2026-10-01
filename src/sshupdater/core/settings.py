@@ -8,6 +8,7 @@ LOG_FILE = DATA_DIR / "app.log"
 DB_PATH = DATA_DIR / "app.db"
 CONFIG_ENC = DATA_DIR / "config.enc"
 KNOWN_HOSTS = DATA_DIR / "known_hosts"
+KNOWN_HOSTS_MAC = DATA_DIR / "known_hosts.mac"
 THEME = "light"
 
 

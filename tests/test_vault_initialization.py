@@ -20,13 +20,14 @@ class VaultInitializationTests(unittest.TestCase):
                 (crypto, 'DATA_DIR', self.root),
                 (crypto, '_SALT_PATH', self.root / 'vault.salt'),
                 (crypto, '_VERIFIER_PATH', self.root / 'vault.verify'),
-                (crypto, '_FERNET', None), (db, 'DB_PATH', self.root / 'app.db')):
+                (crypto, '_FERNET', None), (crypto, '_MAC_KEY', None),
+                (db, 'DB_PATH', self.root / 'app.db')):
             patch = mock.patch.object(module, name, value)
             patch.start()
             self.addCleanup(patch.stop)
 
     def create_credentials(self):
-        crypto.set_master_password('original')
+        crypto.set_master_password('original secret pw')
         db.init_db()
         self.hid = db.add_or_update_host(proxmox_uid=None, name='old', primary_ip='server',
                                         auth_method='password', password_plain='retained secret')
@@ -36,19 +37,24 @@ class VaultInitializationTests(unittest.TestCase):
         with self.assertRaises(OSError):
             crypto.keystore_exists()
         with self.assertRaises(OSError):
-            crypto.set_master_password('replacement')
+            crypto.set_master_password('replacement secret pw')
         self.assertFalse(crypto.is_unlocked())
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.root.iterdir() if p.is_file()})
 
     def test_both_files_missing_with_credentials(self):
         self.create_credentials()
-        crypto._SALT_PATH.unlink()
+        crypto._kdf_path().unlink()
         crypto._VERIFIER_PATH.unlink()
         self.assert_rejected_unchanged()
 
-    def test_only_salt_missing_with_credentials(self):
+    def test_only_kdf_missing_with_credentials(self):
         self.create_credentials()
-        crypto._SALT_PATH.unlink()
+        crypto._kdf_path().unlink()
+        self.assert_rejected_unchanged()
+
+    def test_only_verifier_missing_with_credentials_scrypt(self):
+        self.create_credentials()
+        crypto._VERIFIER_PATH.unlink()
         self.assert_rejected_unchanged()
 
     def test_only_verifier_missing_with_credentials(self):
@@ -64,24 +70,29 @@ class VaultInitializationTests(unittest.TestCase):
             return original(path, data, **kwargs)
         with mock.patch.object(storage, 'write_private', side_effect=fail_verifier):
             with self.assertRaises(OSError):
-                crypto.set_master_password('original')
-        self.assertTrue(crypto._SALT_PATH.exists())
-        self.assert_rejected_unchanged()
+                crypto.set_master_password('original secret pw')
+        # Verifier scheiterte -> kein KDF-Block, kein Verifier, sauberer Abbruch.
+        self.assertFalse(crypto._VERIFIER_PATH.exists())
+        self.assertFalse(crypto._kdf_path().exists())
 
     def test_fresh_installation_and_subsequent_unlock(self):
         self.assertFalse(crypto.keystore_exists())
-        crypto.set_master_password('original')
+        crypto.set_master_password('original secret pw')
+        # Neuer Erstlauf legt einen scrypt-Vault (vault.kdf) an, keinen Legacy-Salt.
+        self.assertTrue(crypto._kdf_path().exists())
+        self.assertFalse(crypto._SALT_PATH.exists())
         encrypted = crypto.encrypt_str('retained secret')
-        before = (crypto._SALT_PATH.read_bytes(), crypto._VERIFIER_PATH.read_bytes())
-        crypto.set_master_password('original')
+        before = (crypto._kdf_path().read_bytes(), crypto._VERIFIER_PATH.read_bytes())
+        crypto.set_master_password('original secret pw')
         self.assertEqual(crypto.decrypt_str(encrypted), 'retained secret')
-        self.assertEqual(before, (crypto._SALT_PATH.read_bytes(), crypto._VERIFIER_PATH.read_bytes()))
+        # Entsperren aendert weder KDF-Block noch Verifier.
+        self.assertEqual(before, (crypto._kdf_path().read_bytes(), crypto._VERIFIER_PATH.read_bytes()))
 
     def test_existing_database_without_credentials_allows_initialization(self):
         db.init_db()
         db.add_or_update_host(proxmox_uid=None, name='key only', primary_ip='server')
         self.assertFalse(crypto.keystore_exists())
-        crypto.set_master_password('original')
+        crypto.set_master_password('original secret pw')
         self.assertEqual(len(db.list_hosts()), 1)
 
     def test_encrypted_config_without_vault_is_preserved(self):
@@ -92,10 +103,14 @@ class VaultInitializationTests(unittest.TestCase):
         (self.root / 'app.db').write_bytes(b'not a database')
         self.assert_rejected_unchanged()
 
-    def test_invalid_salt_is_preserved(self):
+    def test_invalid_kdf_block_is_preserved(self):
         self.create_credentials()
-        crypto._SALT_PATH.write_bytes(b'truncated')
-        self.assert_rejected_unchanged()
+        crypto._kdf_path().write_bytes(b'{not valid json')
+        before = crypto._kdf_path().read_bytes()
+        with self.assertRaises(Exception):
+            crypto.set_master_password('original secret pw')
+        self.assertFalse(crypto.is_unlocked())
+        self.assertEqual(crypto._kdf_path().read_bytes(), before)
 
     def test_mismatched_credentials_do_not_unlock_or_modify_data(self):
         self.create_credentials()
@@ -103,7 +118,7 @@ class VaultInitializationTests(unittest.TestCase):
             con.execute('UPDATE hosts SET password_enc=?', (b'foreign or corrupt token',))
         before = (self.root / 'app.db').read_bytes()
         with self.assertRaisesRegex(OSError, 'inkonsistent'):
-            crypto.set_master_password('original')
+            crypto.set_master_password('original secret pw')
         self.assertFalse(crypto.is_unlocked())
         self.assertEqual((self.root / 'app.db').read_bytes(), before)
         with self.assertRaises(sqlite3.ProgrammingError):
@@ -115,7 +130,7 @@ class VaultInitializationTests(unittest.TestCase):
         self.create_credentials()
         crypto._VERIFIER_PATH.write_bytes(b'partial verifier')
         with self.assertRaisesRegex(crypto.WrongPassword, 'beschädigt'):
-            crypto.set_master_password('original')
+            crypto.set_master_password('original secret pw')
         self.assertFalse(crypto.is_unlocked())
         self.assertEqual(crypto._VERIFIER_PATH.read_bytes(), b'partial verifier')
 
@@ -127,6 +142,6 @@ class VaultInitializationTests(unittest.TestCase):
         con.execute("INSERT INTO hosts(name, primary_ip, password_enc) VALUES('old', 'server', ?)", (b'token',))
         con.commit()
         with self.assertRaises(OSError):
-            crypto.set_master_password('replacement')
+            crypto.set_master_password('replacement secret pw')
         self.assertFalse(crypto._SALT_PATH.exists())
         self.assertEqual(con.execute('SELECT password_enc FROM hosts').fetchone()[0], b'token')

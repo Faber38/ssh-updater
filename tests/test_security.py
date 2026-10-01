@@ -99,8 +99,11 @@ class PrivateStorageTests(unittest.TestCase):
             with self.assertRaises(credentials.LegacyCredentialRequired):
                 db.get_host_password(hid)
             crypto.set_master_password('test master')
+            # F3: Legacy-Vault wird beim Entsperren auf scrypt migriert. Der Vault-Schluessel
+            # bleibt gleich, daher bleiben Credentials und Verifier unveraendert lesbar.
             self.assertEqual(db.get_host(hid)['password_enc'], token)
-            self.assertEqual((self.root / 'vault.salt').read_bytes(), salt)
+            self.assertTrue(crypto._kdf_path().exists())
+            self.assertFalse((self.root / 'vault.salt').exists())
             self.assertEqual((self.root / 'vault.verify').read_bytes(), verifier)
             with self.assertRaises(crypto.WrongPassword):
                 crypto.set_master_password('wrong')
@@ -137,7 +140,7 @@ class PrivateStorageTests(unittest.TestCase):
               mock.patch.object(crypto, '_SALT_PATH', path),
               mock.patch.object(crypto, '_VERIFIER_PATH', self.root / 'vault.verify')):
             with self.assertRaisesRegex(OSError, 'unvollständig'):
-                crypto.set_master_password('new')
+                crypto.set_master_password('new secret phrase')
         self.assertFalse((self.root / 'vault.verify').exists())
         self.assertEqual(path.read_bytes(), bytes(range(16)))
 
@@ -208,9 +211,20 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
                            if os.fspath(path) == '~' or os.fspath(path).startswith('~/') else expanduser(path))
         patch.start(); self.addCleanup(patch.stop)
         self.assertEqual(Path('~', '.ssh', 'known_hosts').expanduser(), self.external_ssh / 'known_hosts')
-        for name, value in [('DATA_DIR', self.root), ('KNOWN_HOSTS', self.root / 'known_hosts')]:
-            patch = mock.patch.object(settings, name, value)
+        for module, name, value in (
+                (settings, 'DATA_DIR', self.root),
+                (settings, 'KNOWN_HOSTS', self.root / 'known_hosts'),
+                (settings, 'KNOWN_HOSTS_MAC', self.root / 'known_hosts.mac'),
+                (crypto, 'DATA_DIR', self.root),
+                (crypto, '_SALT_PATH', self.root / 'vault.salt'),
+                (crypto, '_VERIFIER_PATH', self.root / 'vault.verify'),
+                (crypto, '_FERNET', None),
+                (crypto, '_MAC_KEY', None)):
+            patch = mock.patch.object(module, name, value)
             patch.start(); self.addCleanup(patch.stop)
+        storage.initialize(self.root)
+        crypto.set_master_password('synthetic transport master')
+        host_keys.initialize_fresh()
         self.config = self.root / 'config'
         self.config.write_text('', encoding="utf-8")
         original = ssh_connection.options_for
@@ -227,7 +241,10 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.auth = []
         self.commands = []
         self.servers = []
-        self.host = dict(id=1, password_enc=b'synthetic-transport-fixture', name='test', primary_ip='127.0.0.1', user='user', auth_method='password')
+        self.host = dict(id=1,
+                         password_enc=credentials.V2_PREFIX + b'synthetic-transport-fixture',
+                         name='test', primary_ip='127.0.0.1', user='user',
+                         auth_method='password')
         self.host['port'] = await self.start_server(self.key)
 
     async def asyncTearDown(self):
@@ -458,7 +475,10 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         settings.KNOWN_HOSTS.write_bytes(
             f"[127.0.0.1]:{self.host['port']} ".encode() + wrong.export_public_key())
         self.external_trust(self.key)
-        await self.assert_blocked_without_auth(changed=True)
+        with self.assertRaises(host_keys.TruststoreIntegrityError):
+            async with ssh_connection.connect_host(self.host):
+                self.fail('Tampered truststore accepted')
+        self.assertEqual(self.auth, [])
 
     async def test_rotated_key_still_blocked_when_externally_trusted(self):
         await self.trust()
@@ -477,7 +497,10 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         wrong = asyncssh.generate_private_key('ssh-ed25519')
         settings.KNOWN_HOSTS.write_bytes(f'[127.0.0.1]:{port} '.encode() + wrong.export_public_key())
         self.external_trust(jump_key, port)
-        await self.assert_blocked_without_auth(dict(self.host, primary_ip='target'), changed=True)
+        with self.assertRaises(host_keys.TruststoreIntegrityError):
+            async with ssh_connection.connect_host(dict(self.host, primary_ip='target')):
+                self.fail('Tampered truststore accepted')
+        self.assertEqual(self.auth, [])
 
     async def test_host_certificate_and_raw_key_with_client_certificate(self):
         ca = asyncssh.generate_private_key('ssh-ed25519')
@@ -513,7 +536,7 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         observation = await ssh_connection.inspect_host(self.host)
         self.assertEqual(observation.key, self.key.convert_to_public())
         self.assertEqual(self.auth, [])
-        self.assertFalse(settings.KNOWN_HOSTS.exists())
+        self.assertEqual(settings.KNOWN_HOSTS.read_bytes(), b'')
 
     async def test_known_key_connects_and_changed_key_blocks_before_auth(self):
         await self.trust()

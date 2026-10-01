@@ -13,6 +13,7 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'src'))
+import asyncssh
 from PyQt6 import QtWidgets
 from sshupdater.core import credentials, crypto, db, settings, ssh_connection, host_keys
 from sshupdater.ui_config import LegacyPasswordDialog, confirm_legacy_passwords
@@ -29,14 +30,16 @@ class CredentialV2Tests(unittest.TestCase):
         self.root = Path(temp.name)
         for module, name, value in (
             (db, 'DB_PATH', self.root / 'app.db'),
-            (crypto, 'DATA_DIR', self.root), (crypto, '_FERNET', None),
+            (crypto, 'DATA_DIR', self.root), (crypto, '_FERNET', None), (crypto, '_MAC_KEY', None),
             (crypto, '_SALT_PATH', self.root / 'vault.salt'),
             (crypto, '_VERIFIER_PATH', self.root / 'vault.verify'),
             (settings, 'DATA_DIR', self.root), (settings, 'KNOWN_HOSTS', self.root / 'known_hosts'),
+            (settings, 'KNOWN_HOSTS_MAC', self.root / 'known_hosts.mac'),
         ):
             patch = mock.patch.object(module, name, value)
             patch.start(); self.addCleanup(patch.stop)
-        crypto.set_master_password('synthetic master')
+        crypto.set_master_password('synthetic master pw')
+        host_keys.initialize_fresh()
         db.init_db()
         self.values = dict(name='sample', primary_ip='alias.example', user='admin', port=22,
                            auth_method='password')
@@ -64,7 +67,7 @@ class CredentialV2Tests(unittest.TestCase):
     def assert_unlock_unchanged_failure(self):
         before = {p.name: p.read_bytes() for p in self.root.iterdir() if p.is_file()}
         with self.assertRaisesRegex(OSError, 'inkonsistent'):
-            crypto.set_master_password('synthetic master')
+            crypto.set_master_password('synthetic master pw')
         self.assertFalse(crypto.is_unlocked())
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.root.iterdir() if p.is_file()})
 
@@ -216,7 +219,7 @@ class CredentialV2Tests(unittest.TestCase):
         token = self.legacy(other)
         (self.root / 'config.enc').write_bytes(crypto.encrypt_str('synthetic config'))
         before = {p.name: p.read_bytes() for p in self.root.iterdir() if p.is_file()}
-        crypto.set_master_password('synthetic master')
+        crypto.set_master_password('synthetic master pw')
         self.assertTrue(crypto.is_unlocked())
         self.assertEqual(db.get_host(other)['password_enc'], token)
         self.assertEqual(before, {p.name: p.read_bytes() for p in self.root.iterdir() if p.is_file()})
@@ -322,7 +325,7 @@ class CredentialV2Tests(unittest.TestCase):
         with self.assertRaises(TypeError):
             context['port'] = 99
         self.assertEqual(context['password_enc'], self.host['password_enc'])
-        self.assertEqual(ssh_connection.auth_params(context)['password'], 'synthetic secret')
+        self.assertIsNone(ssh_connection.auth_params(context)['password'])
 
     def test_isolated_password_mode_snapshot_changes(self):
         for field, value in [('primary_ip', 'other'), ('user', 'other'), ('port', 2222),
@@ -355,7 +358,8 @@ class CredentialV2Tests(unittest.TestCase):
         @asynccontextmanager
         async def opened(options, requested, **kwargs):
             db.update_host(self.hid, password_plain='new password', **dict(self.values, port=2222))
-            captured.append((options.host, options.port, options.username, options.password, requested))
+            captured.append((options.host, options.port, options.username, options.password,
+                             requested, kwargs['credential_host']))
             yield object()
         async def attempt():
             async with ssh_connection.connect_host(self.host):
@@ -365,7 +369,8 @@ class CredentialV2Tests(unittest.TestCase):
                 mock.patch.object(ssh_connection, 'options_for', side_effect=lambda h: original(h, config=[])), \
                 mock.patch.object(db, 'get_host_password', side_effect=AssertionError('late password read')):
             asyncio.run(attempt())
-        self.assertEqual(captured, [('alias.example', 22, 'admin', 'synthetic secret', 'alias.example')])
+        self.assertEqual(captured, [('alias.example', 22, 'admin', None, 'alias.example',
+                                     db.connection_context(self.host))])
 
     def test_errors_and_tracebacks_never_include_plaintext_payload(self):
         marker = 'SYNTHETIC-SECRET-DO-NOT-LOG'
@@ -383,7 +388,7 @@ class CredentialV2Tests(unittest.TestCase):
     def test_database_handles_close_for_replace_and_rename(self):
         db.get_connection_context(self.host)
         db.set_host_password(self.hid, 'synthetic replacement')
-        crypto.set_master_password('synthetic master')
+        crypto.set_master_password('synthetic master pw')
         # Also runs on Windows CI, where outstanding handles prevent rename/delete.
         moved = db.DB_PATH.with_name('moved.db')
         db.DB_PATH.rename(moved)
@@ -464,18 +469,27 @@ class CredentialV2Tests(unittest.TestCase):
                 self.assertEqual(results[0]['status'], 'error')
                 self.assertIn('zwischenzeitlich geändert', results[0]['note'])
 
-    def test_v122_v123_schema_and_legacy_vault_remain_readable_without_migration(self):
+    def test_v122_v123_schema_and_legacy_vault_migrate_and_remain_readable(self):
         # This schema is identical in the v1.2.2 and v1.2.3 source tags.
         schema = (Path(__file__).parent / 'fixtures' / 'v1.2.2-v1.2.3-schema.sql').read_text(encoding='utf-8')
         for old_version in ('1.2.2', '1.2.3'):
             with self.subTest(version=old_version):
                 root = self.root / old_version
                 root.mkdir()
-                salt = crypto._SALT_PATH.read_bytes()
-                verifier = crypto._VERIFIER_PATH.read_bytes()
+                # Echten Legacy-Vault (PBKDF2, wie v1.1.8-v1.2.3) unabhaengig aufbauen.
+                import base64
+                from cryptography.fernet import Fernet
+                from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+                from cryptography.hazmat.primitives import hashes
+                salt = bytes(range(16))
+                legacy_key = base64.urlsafe_b64encode(PBKDF2HMAC(
+                    algorithm=hashes.SHA256(), length=32, salt=salt, iterations=200_000
+                ).derive(b'synthetic master pw'))
+                legacy_fernet = Fernet(legacy_key)
+                verifier = legacy_fernet.encrypt(crypto._CHALLENGE)
                 (root / 'vault.salt').write_bytes(salt)
                 (root / 'vault.verify').write_bytes(verifier)
-                legacy = crypto.encrypt_str('old synthetic password')
+                legacy = legacy_fernet.encrypt('old synthetic password'.encode('utf-8'))
                 path = root / 'app.db'
                 with closing(sqlite3.connect(path)) as con, con:
                     con.executescript(schema)
@@ -485,14 +499,19 @@ class CredentialV2Tests(unittest.TestCase):
                 with mock.patch.object(db, 'DB_PATH', path), mock.patch.object(crypto, 'DATA_DIR', root), \
                         mock.patch.object(crypto, '_SALT_PATH', root / 'vault.salt'), \
                         mock.patch.object(crypto, '_VERIFIER_PATH', root / 'vault.verify'):
-                    crypto.set_master_password('synthetic master')
+                    crypto.set_master_password('synthetic master pw')
                     db.init_db()
                     self.assertEqual(len(db.list_hosts()), 2)
                     self.assertEqual(db.get_host(1)['password_enc'], legacy)
                     self.assertEqual(db.get_connection_context(db.get_host(2))['auth_method'], 'key')
                     with self.assertRaises(credentials.LegacyCredentialRequired):
                         db.get_host_password(1)
-                    self.assertEqual(before, {p.name: p.read_bytes() for p in root.iterdir()})
+                    # F3-Migration: vault.kdf entstanden, vault.salt entfernt, Daten intakt.
+                    self.assertTrue((root / 'vault.kdf').exists())
+                    self.assertFalse((root / 'vault.salt').exists())
+                    self.assertEqual(db.get_host(1)['password_enc'], legacy)
+                    self.assertEqual((root / 'vault.verify').read_bytes(), before['vault.verify'])
+                    self.assertEqual((root / 'app.db').read_bytes(), before['app.db'])
 
     def test_workers_allow_historical_default_user_and_port(self):
         from sshupdater import ui_main
@@ -503,7 +522,7 @@ class CredentialV2Tests(unittest.TestCase):
         context = db.get_connection_context(host)
         options = ssh_connection.options_for(context, config=[])
         self.assertEqual((options.username, options.port), ('root', 22))
-        self.assertEqual(options.password, 'synthetic secret')
+        self.assertIsNone(options.password)
         for worker_cls, method in [(ui_main._CheckWorker, 'check_updates_for_host'),
                                    (ui_main._SimWorker, 'simulate_upgrade_for_host')]:
             operation = mock.AsyncMock(return_value={'status': 'ok', 'host_id': self.hid})
@@ -565,15 +584,24 @@ class CredentialV2Tests(unittest.TestCase):
                     crypto.decrypt_host_password(token, dict(self.host, user=username))
 
     def test_valid_ascii_and_unicode_secrets_preserved_without_normalization(self):
+        key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+        host_keys.confirm(host_keys.Observation('alias.example', 22, key))
         for secret in ('synthetic ASCII', 'päss🔑管理', 'Ａpa\u0308ss\u00adword'):
             with self.subTest(kind='unicode' if not secret.isascii() else 'ascii'):
                 db.set_host_password(self.hid, secret)
                 host = db.get_host(self.hid)
                 self.assertEqual(db.get_host_password(self.hid), secret)
-                options = ssh_connection.options_for(db.get_connection_context(host), config=[])
-                self.assertEqual(options.password, secret)
+                context = db.get_connection_context(host)
+                options = ssh_connection.options_for(context, config=[])
+                self.assertIsNone(options.password)
+                validator = host_keys.Validator('alias.example', 22, 'alias.example',
+                                                 credential_host=context)
+                self.assertTrue(validator.validate_host_public_key(
+                    'alias.example', '192.0.2.1', 22, key))
+                password = validator.password_auth_requested()
+                self.assertEqual(password, secret)
                 from asyncssh.packet import String
-                self.assertEqual(String(options.password)[4:], secret.encode('utf-8'))
+                self.assertEqual(String(password)[4:], secret.encode('utf-8'))
 
     def test_non_utf8_secrets_rejected_on_write_and_read(self):
         for secret in ('synthetic\ud800', '\udfff', '\ud800\udc00'):
@@ -735,7 +763,7 @@ class CredentialV2Tests(unittest.TestCase):
                 self.raw_token(token)
                 with self.assertNoLogs(level=logging.DEBUG):
                     with self.assertRaises(OSError) as error:
-                        crypto.set_master_password('synthetic master')
+                        crypto.set_master_password('synthetic master pw')
                     self.assert_no_secret_output(''.join(traceback.format_exception(error.exception)), marker, payload)
                     # Exercise the real startup error-to-dialog propagation.
                     with mock.patch.object(application.settings, 'initialize'), \
@@ -761,6 +789,8 @@ class CredentialV2Tests(unittest.TestCase):
             window = ui_main.MainWindow()
         self.addCleanup(window.close)
         window._clean_results = {}
+        key = asyncssh.generate_private_key('ssh-ed25519').convert_to_public()
+        host_keys.confirm(host_keys.Observation('alias.example', 22, key))
         for token, marker, payload in self.leak_cases():
             self.raw_token(token)
             for worker_cls, signal, slot in cases:
@@ -770,10 +800,17 @@ class CredentialV2Tests(unittest.TestCase):
                     results = []
                     getattr(worker, signal).connect(results.append)
                     getattr(worker, signal).connect(getattr(window, slot))
+                    async def connect_after_pin(*args, client_factory, **kwargs):
+                        validator = client_factory()
+                        self.assertTrue(validator.validate_host_public_key(
+                            'alias.example', '192.0.2.1', 22, key))
+                        validator.password_auth_requested()
+                        self.fail('Malformed credential was accepted')
                     with self.capture_logs() as logs, \
-                            mock.patch.object(ssh_connection.asyncssh, 'connect') as connect:
+                            mock.patch.object(ssh_connection.asyncssh, 'connect',
+                                              side_effect=connect_after_pin) as connect:
                         worker.run()
-                    connect.assert_not_called()
+                    connect.assert_called_once()
                     self.assertEqual(len(results), 1)
                     self.assertEqual(results[0]['status'], 'error')
                     self.assertIsNone(worker.fatal_error)
