@@ -76,7 +76,12 @@ Update-Prüfung `checkupdates` aus `pacman-contrib` benötigt. APT muss die Opti
 Beim ersten Start ein Master-Passwort festlegen und bestätigen. Bei späteren
 Starts den lokalen Vault damit entsperren. Dies ist auch bei ausschließlicher
 SSH-Key-Nutzung erforderlich. Das Master-Passwort schützt lokal verschlüsselte
-Zugangsdaten; Einzelheiten stehen in der In-App-Hilfe.
+Zugangsdaten. Neue Vaults verwenden scrypt und verlangen mindestens zwölf Zeichen.
+Bestehende Vaults werden nach erfolgreichem Entsperren automatisch migriert.
+Ein vorhandener Truststore ohne Integritätssiegel wird nicht automatisch übernommen;
+die Anwendung verlangt eine erneute, unabhängige Bestätigung aller Server-Fingerprints.
+Einzelheiten stehen in der In-App-Hilfe und in der
+[Härtungsdokumentation](docs/security-hardening-v1.2.5.md).
 
 ## Grundlegende Bedienung
 
@@ -171,6 +176,11 @@ Bastion-/Jump-Host-Ersatz.
 
 Ein vertrauenswürdiges LAN ersetzt weder SSH-Key-Schutz und Host-Key-Prüfung
 noch angemessene Rechte oder Backups/Snapshots vor kritischen Änderungen.
+
+SSH Updater authentisiert seinen eigenen Host-Key-Truststore und entschlüsselt
+gespeicherte SSH-Passwörter erst nach erfolgreicher Pin-Prüfung. Produktive
+Verbindungen verwenden die in der Anwendung gespeicherte Adresse, Port und Benutzer;
+benutzerspezifische OpenSSH-Konfiguration wird dabei nicht geladen.
 
 Das Tool enthält angemessene Schutzmaßnahmen für diesen Einsatzzweck. Es ist jedoch
 keine Hochsicherheitslösung für bereits kompromittierte Clients oder feindliche

@@ -75,7 +75,11 @@ a password prompt. On Arch, update checks require `checkupdates` from
 On first launch, set and confirm a master password. On subsequent launches,
 unlock the local vault with that password. This is required even when using only
 SSH keys. The master password protects locally encrypted credentials; see the
-in-app help for details.
+in-app help for details. New vaults use scrypt and require at least twelve
+characters. Existing vaults migrate after a successful unlock. An existing host-key
+trust store without an integrity tag is never accepted automatically; every server
+fingerprint must be confirmed again through an independent source. See the
+[hardening notes](docs/security-hardening-v1.2.5.md) for the migration details.
 
 ## Basic Usage
 
@@ -165,6 +169,11 @@ system, Zero Trust gateway, or bastion/jump-host replacement.
 
 A trusted LAN does not replace SSH key protection, host-key verification,
 appropriate permissions, or backups/snapshots before critical changes.
+
+SSH Updater authenticates its application-owned host-key trust store and decrypts
+stored SSH passwords only after a successful pin check. Production connections use
+the address, port, and user stored by the application and do not load the user's
+OpenSSH configuration.
 
 The tool includes appropriate safeguards for this purpose. However, it is not a
 high-security solution for already compromised clients or hostile local
