@@ -10,7 +10,7 @@ LANs. Es verbindet eine Mehrhostübersicht, Paketprüfung und Systemupdates,
 SSH-/Host-Key-Prüfung, Docker-/Compose-Unterstützung und lokale Offline-Hilfe.
 Auch per SSH erreichbare VMs und Container können als Hosts verwaltet werden.
 
-Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta5**
+Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta6**
 [English README](README_EN.md)
 
 ## Features
@@ -82,9 +82,11 @@ Zugangsdaten; Einzelheiten stehen in der In-App-Hilfe.
 
 1. **Konfiguration** öffnen und Hosts mit Adresse, Benutzer, Port sowie Passwort
    oder SSH-Key hinzufügen.
-2. Für jeden neuen Host **Serveridentität prüfen** öffnen. Den angezeigten
-   Fingerprint mit der Serverkonsole oder einer unabhängig geprüften Quelle
-   vergleichen und erst bei Übereinstimmung bestätigen.
+2. In **Konfiguration → Serveridentität prüfen** ausgewählte Hostzeilen prüfen;
+   ohne Auswahl werden alle noch unbestätigten Endpunkte geprüft. Die Prüfung
+   führt keinen Login aus und erzeugt kein Vertrauen. Fingerprints unabhängig
+   vergleichen und nur die gewünschten Endpunkte ausdrücklich bestätigen.
+   Geänderte Keys erfordern zusätzlich eine einzelne Warnbestätigung.
 3. Im Hauptfenster die gewünschten Hosts auswählen und mit **Prüfen** nach Updates
    suchen. **Simulieren** zeigt eine Vorschau, ohne Paket-Upgrades auszuführen.
    Bei DNF und Arch ist dies eine Updateübersicht, kein vollständiger Transaktionsplan.
@@ -252,8 +254,42 @@ Unverbindliche Ideen ohne Releasezusage:
 - Log-Archivierung und Export
 - Optionale Statusmeldungen via Telegram
 
+## Danksagung
+
+Besonderer Dank geht an **Calimero078** für die intensive Unterstützung bei
+der Analyse und Härtung der SSH- und Credential-Sicherheit. Seine Tests,
+Reviews und sein eigener Security-Hardening-Entwurf haben wesentlich zur
+Weiterentwicklung der Host-Key-Prüfung, des authentifizierten Trust-Stores
+und der kontrollierten Credential-Freigabe beigetragen.
+
+Ebenfalls vielen Dank an alle, die den SSH Updater testen und mit konkreten
+Fehlerberichten und ungewöhnlichen Konfigurationen dabei helfen, ihn robuster
+zu machen.
+
 ## Lizenz
 
 MIT License – siehe [LICENSE](LICENSE).
 
 Copyright (c) 2025 Holger Mangold
+
+
+### Serveridentität und Verbindungsdaten
+
+Host/IP, Port, Benutzer und expliziter Key-Pfad aus SSH Updater sind maßgeblich.
+Die Datei `~/.ssh/config` wird nicht automatisch geladen. SSH-Konfigurationsaliase,
+HostKeyAlias, ProxyJump, ProxyCommand sowie dortige IdentityFile-/CertificateFile-
+und Komfortoptionen entfallen bewusst. Verwenden Sie direkt erreichbare IPs oder
+DNS-Namen. Ohne expliziten Key-Pfad bleiben Standardschlüssel und SSH-Agent für
+normale Key-Anmeldungen verfügbar; die Identitätsprüfung nutzt keinerlei Credentials.
+
+Hosteinträge mit gleicher Adresse und gleichem Port teilen einen bestätigten Pin.
+Der app-eigene Trust-Store ist per HMAC an den bestehenden Vault gebunden. Ein alter
+Store ohne MAC verlangt eine ausdrückliche Neubestätigung: alte Dateien werden
+inaktiv und ohne Überschreiben früherer Sicherungen quarantänisiert, danach wird
+mit einem leeren authentifizierten Store begonnen. Recovery ist auch beim Start
+möglich. Ungültige Store-/MAC-Paare blockieren SSH; vorhandene Pins werden niemals
+automatisch neu signiert. Das Vault- und Credential-v2-Format bleibt unverändert.
+
+Dieser Schutz ist für das kontrollierte private LAN vorgesehen. Er verhindert
+keinen Replay eines früher gültigen Store-/MAC-Paars. Backups müssen das
+zusammengehörige Dateipaar und den zugehörigen Vault enthalten.

@@ -89,6 +89,7 @@ class PrivateStorageTests(unittest.TestCase):
               mock.patch.object(crypto, '_SALT_PATH', self.root / 'vault.salt'),
               mock.patch.object(crypto, '_VERIFIER_PATH', self.root / 'vault.verify'),
               mock.patch.object(crypto, '_FERNET', None),
+              mock.patch.object(crypto, '_MAC_KEY', None),
               mock.patch.object(db, 'DB_PATH', self.root / 'app.db')):
             crypto.set_master_password('test master')
             db.init_db()
@@ -208,15 +209,27 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
                            if os.fspath(path) == '~' or os.fspath(path).startswith('~/') else expanduser(path))
         patch.start(); self.addCleanup(patch.stop)
         self.assertEqual(Path('~', '.ssh', 'known_hosts').expanduser(), self.external_ssh / 'known_hosts')
-        for name, value in [('DATA_DIR', self.root), ('KNOWN_HOSTS', self.root / 'known_hosts')]:
-            patch = mock.patch.object(settings, name, value)
+        for module, name, value in (
+                (settings, 'DATA_DIR', self.root),
+                (settings, 'KNOWN_HOSTS', self.root / 'known_hosts'),
+                (settings, 'KNOWN_HOSTS_MAC', self.root / 'known_hosts.mac'),
+                (crypto, 'DATA_DIR', self.root),
+                (crypto, '_SALT_PATH', self.root / 'vault.salt'),
+                (crypto, '_VERIFIER_PATH', self.root / 'vault.verify'),
+                (crypto, '_FERNET', None),
+                (crypto, '_MAC_KEY', None)):
+            patch = mock.patch.object(module, name, value)
             patch.start(); self.addCleanup(patch.stop)
+        storage.initialize(self.root)
+        crypto.set_master_password('synthetic transport master')
+        host_keys.initialize_fresh()
         self.config = self.root / 'config'
         self.config.write_text('', encoding="utf-8")
         original = ssh_connection.options_for
         patch = mock.patch.object(ssh_connection, 'options_for',
-                                  side_effect=lambda host, **kw: original(host, config=[self.config], **kw))
+                                  side_effect=lambda host, **kw: original(host, config=[] if kw.get("inspect") else [self.config], **kw))
         patch.start(); self.addCleanup(patch.stop)
+        # Explicit config injection below tests internal transport helpers, not product config support.
         # These tests isolate transport policy. Real DB snapshot/codec integration
         # is exercised in test_credentials_v2, including refusal before any socket.
         patch = mock.patch.object(db, 'get_connection_context', side_effect=lambda host: host)
@@ -227,7 +240,10 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.auth = []
         self.commands = []
         self.servers = []
-        self.host = dict(id=1, password_enc=b'synthetic-transport-fixture', name='test', primary_ip='127.0.0.1', user='user', auth_method='password')
+        self.host = dict(id=1,
+                         password_enc=credentials.V2_PREFIX + b'synthetic-transport-fixture',
+                         name='test', primary_ip='127.0.0.1', user='user',
+                         auth_method='password')
         self.host['port'] = await self.start_server(self.key)
 
     async def asyncTearDown(self):
@@ -458,7 +474,10 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         settings.KNOWN_HOSTS.write_bytes(
             f"[127.0.0.1]:{self.host['port']} ".encode() + wrong.export_public_key())
         self.external_trust(self.key)
-        await self.assert_blocked_without_auth(changed=True)
+        with self.assertRaises(host_keys.TruststoreIntegrityError):
+            async with ssh_connection.connect_host(self.host):
+                self.fail('Tampered truststore accepted')
+        self.assertEqual(self.auth, [])
 
     async def test_rotated_key_still_blocked_when_externally_trusted(self):
         await self.trust()
@@ -469,17 +488,7 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.external_trust(replacement)
         await self.assert_blocked_without_auth(changed=True)
 
-    async def test_proxyjump_external_trust_cannot_override_application_pin(self):
-        jump_key = asyncssh.generate_private_key('ssh-ed25519')
-        port = await self.start_server(jump_key)
-        self.config.write_text('Host target\n HostName 127.0.0.1\n ProxyJump jump\n'
-                               f'Host jump\n HostName 127.0.0.1\n Port {port}\n', encoding="utf-8")
-        wrong = asyncssh.generate_private_key('ssh-ed25519')
-        settings.KNOWN_HOSTS.write_bytes(f'[127.0.0.1]:{port} '.encode() + wrong.export_public_key())
-        self.external_trust(jump_key, port)
-        await self.assert_blocked_without_auth(dict(self.host, primary_ip='target'), changed=True)
-
-    async def test_host_certificate_and_raw_key_with_client_certificate(self):
+    async def test_internal_config_host_certificate_and_raw_key_with_client_certificate(self):
         ca = asyncssh.generate_private_key('ssh-ed25519')
         host_cert = ca.generate_host_certificate(self.key, 'host', principals=['127.0.0.1'])
         client = asyncssh.generate_private_key('ssh-ed25519')
@@ -499,7 +508,7 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(('client-ca', ca.convert_to_public()), self.auth)
         self.assertNotIn(('password', 'secret'), self.auth)
 
-    async def test_certificate_only_algorithm_config_fails_before_auth(self):
+    async def test_internal_certificate_only_algorithm_config_fails_before_auth(self):
         self.config.write_text('Host *\n HostKeyAlgorithms ssh-ed25519-cert-v01@openssh.com\n', encoding="utf-8")
         with self.assertRaisesRegex(OSError, 'HostKeyAlgorithms'):
             async with ssh_connection.connect_host(self.host):
@@ -513,7 +522,7 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         observation = await ssh_connection.inspect_host(self.host)
         self.assertEqual(observation.key, self.key.convert_to_public())
         self.assertEqual(self.auth, [])
-        self.assertFalse(settings.KNOWN_HOSTS.exists())
+        self.assertEqual(settings.KNOWN_HOSTS.read_bytes(), b'')
 
     async def test_known_key_connects_and_changed_key_blocks_before_auth(self):
         await self.trust()
@@ -536,30 +545,6 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         async with ssh_connection.connect_host(self.host):
             pass
 
-    async def test_config_alias_identity_and_forwarding_override(self):
-        client_key = asyncssh.generate_private_key('ssh-ed25519')
-        path = self.root / 'identity'
-        client_key.write_private_key(path)
-        port = await self.start_server(self.key, public_key=client_key.convert_to_public())
-        self.config.write_text(f'Host alias\n HostName 127.0.0.1\n IdentityFile {ssh_config_path(path)}\n'
-                               ' ForwardAgent yes\n ForwardX11 yes\n ForwardX11Trusted yes\n RequestTTY force\n'
-                               ' User wrong\n Port 1\n HostKeyAlias pinned-alias\n', encoding="utf-8")
-        host = dict(self.host, primary_ip='alias', port=port, auth_method='key')
-        observation = await self.trust(host)
-        self.assertEqual(observation.host, 'pinned-alias')
-        options = ssh_connection.options_for(host)
-        self.assertEqual(options.host, '127.0.0.1')
-        self.assertEqual(options.username, 'user')
-        self.assertEqual(options.port, port)
-        self.assertFalse(options.agent_forward_path)
-        self.assertFalse(options.x11_forwarding)
-        async with ssh_connection.connect_host(host) as conn:
-            self.assertFalse(conn._agent_forward_path)
-            self.assertFalse(conn._options.x11_forwarding)
-            from sshupdater.core.remote_process import capture
-            self.assertEqual((await capture(conn, 'no forwarding', 2))[0], 0)
-        self.assertNotIn(('password', 'secret'), self.auth)
-
     async def test_password_mode_does_not_use_config_keys_or_agent(self):
         self.config.write_text('Host *\n ForwardAgent yes\n IdentityFile /nonexistent\n'
                                ' IdentityAgent /nonexistent\n GSSAPIAuthentication yes\n', encoding="utf-8")
@@ -573,38 +558,6 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         await self.trust()
         async with ssh_connection.connect_host(self.host):
             pass
-
-    async def test_proxyjump_uses_same_trust_policy(self):
-        client_key = asyncssh.generate_private_key('ssh-ed25519')
-        path = self.root / 'identity'; client_key.write_private_key(path)
-        jump_key = asyncssh.generate_private_key('ssh-ed25519')
-        jump_port = await self.start_server(jump_key, public_key=client_key.convert_to_public())
-        self.config.write_text(f'Host target\n HostName 127.0.0.1\n ProxyJump jump\n'
-                               f'Host jump\n HostName 127.0.0.1\n Port {jump_port}\n'
-                               f' IdentityFile {ssh_config_path(path)}\n'
-                               'Host *\n ForwardAgent yes\n ForwardX11 yes\n ForwardX11Trusted yes\n RequestTTY force\n', encoding="utf-8")
-        host = dict(self.host, primary_ip='target')
-        jump = await self.trust(host)
-        self.assertEqual(jump.port, jump_port)
-        self.assertEqual(self.auth, [])
-        target = await self.trust(host)
-        self.assertEqual(target.port, self.host['port'])
-        original_connect = asyncssh.connect
-        connections = []
-        async def connect(*args, **kwargs):
-            conn = await original_connect(*args, **kwargs)
-            connections.append(conn)
-            return conn
-        with mock.patch.object(asyncssh, 'connect', connect):
-            async with ssh_connection.connect_host(host) as conn:
-                from sshupdater.core.remote_process import capture
-                self.assertEqual((await capture(conn, 'through jump', 2))[0], 0)
-                self.assertEqual(len(connections), 2)
-                for connection in connections:
-                    self.assertFalse(connection._options.request_pty)
-                    self.assertFalse(connection._options.x11_forwarding)
-                    self.assertFalse(connection._agent_forward_path)
-        self.assertIn('through jump', self.commands)
 
     async def test_all_actions_reject_unknown_server(self):
         from sshupdater.core import ssh_client
@@ -651,58 +604,6 @@ class SSHSecurityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(options.client_keys), 1)
         self.assertEqual(options.client_keys[0].get_algorithm(), key.get_algorithm())
 
-    async def test_proxycommand_keeps_transport_and_verifies_target(self):
-        proxy = self.root / 'proxy.py'
-        proxy.write_text("""import socket, sys, threading
-sock = socket.create_connection((sys.argv[1], int(sys.argv[2])))
-def send():
-    while data := sys.stdin.buffer.read1(65536):
-        sock.sendall(data)
-    sock.shutdown(socket.SHUT_WR)
-threading.Thread(target=send, daemon=True).start()
-while True:
-    data = sock.recv(65536)
-    if not data:
-        sys.exit(0)
-    sys.stdout.buffer.write(data)
-    sys.stdout.buffer.flush()
-""", encoding="utf-8")
-        self.config.write_text(f'Host proxy-target\n HostName 127.0.0.1\n'
-                               f' ProxyCommand {ssh_config_path(Path(sys.executable))} {ssh_config_path(proxy)} %h %p\n'
-                               ' ConnectTimeout 5\n ServerAliveInterval 7\n', encoding="utf-8")
-        host = dict(self.host, primary_ip='proxy-target')
-        options = ssh_connection.options_for(host)
-        self.assertEqual(options.keepalive_interval, 7)
-        loop = asyncio.get_running_loop()
-        subprocess_exec = loop.subprocess_exec
-        children = []
-        async def record_child(protocol_factory, *args, **kwargs):
-            exited = asyncio.Event()
-            def factory():
-                protocol = protocol_factory()
-                original_exited = protocol.process_exited
-                def process_exited():
-                    original_exited()
-                    exited.set()
-                protocol.process_exited = process_exited
-                return protocol
-            transport, protocol = await subprocess_exec(factory, *args, **kwargs)
-            children.append((transport, exited))
-            return transport, protocol
-        with mock.patch.object(loop, 'subprocess_exec', side_effect=record_child):
-            await self.trust(host)
-            async with ssh_connection.connect_host(host) as conn:
-                await conn.run('via proxy', check=True)
-        self.assertIn('via proxy', self.commands)
-        self.assertEqual(len(children), 2)  # Inspection and authenticated session.
-        # Closing a transport requests termination; the OS exit notification
-        # is asynchronous. Await that notification, not a timing-based sleep.
-        async with asyncio.timeout(5):
-            await asyncio.gather(*(exited.wait() for _, exited in children))
-        for child, _ in children:
-            self.assertTrue(child.is_closing())
-            self.assertIsNotNone(child.get_returncode(), 'ProxyCommand child still running')
-
     async def test_all_actions_also_block_changed_server(self):
         await self.trust()
         self.servers[0].close()
@@ -710,7 +611,7 @@ while True:
         await self.start_server(asyncssh.generate_private_key('ssh-ed25519'), self.host['port'])
         await self.test_all_actions_reject_unknown_server()
 
-    async def test_certificatefile_matching_explicit_identity_is_preserved(self):
+    async def test_internal_certificatefile_matching_explicit_identity_is_preserved(self):
         key = asyncssh.generate_private_key('ssh-ed25519')
         ca = asyncssh.generate_private_key('ssh-ed25519')
         identity = self.root / 'chosen'

@@ -77,5 +77,5 @@ def initialize(data_dir: Path):
     secure_directory(data_dir)
     for name in ("app.db", "app.db-journal", "app.db-wal", "app.db-shm",
                  "vault.salt", "vault.verify", "config.enc", "app.log",
-                 "known_hosts", "known_hosts.lock", "theme.txt"):
+                 "known_hosts", "known_hosts.mac", "known_hosts.lock", "theme.txt"):
         secure_file(data_dir / name)

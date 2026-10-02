@@ -12,8 +12,8 @@ The approved solution uses the unmodified official upstream commit
 It checks the decoded packet length immediately after receiving its header,
 including before authentication. The initial maximum is 256 KiB. A locally
 requested channel `max_pktsize` can increase it; this application uses the
-standard 32 KiB channel packet size. Direct connections and manually opened
-ProxyJump connections use the same library implementation.
+standard 32 KiB channel packet size. Managed direct connections use this library implementation. Product connections
+do not load OpenSSH configuration and do not support ProxyJump or ProxyCommand.
 
 The source archive URL pins the full commit and SHA256
 `653151d93fc2b62d402dc696f53be3f76541847b0da0daf4212443d956c04674`.
@@ -27,8 +27,9 @@ The transport regression uses a real TCP peer which sends a fragmented SSH
 header advertising 256 KiB + 1 or nearly 4 GiB, without sending the payload.
 The application must raise ProtocolError within one second with traced Python
 allocations below 2 MiB. The unpatched library must fail this test by timing
-out. Normal encrypted SSH sessions, host-key checks and ProxyJump remain
-covered by the integration suite. This is a packet-framing defense, not a
+out. Normal encrypted SSH sessions and host-key checks remain covered by the
+integration suite. Separate product tests verify that SSH configuration cannot
+redirect connections or start proxy commands. This is a packet-framing defense, not a
 claim that all hostile-server CPU/memory denial-of-service cases are solved.
 
 Replace the source pin with an official release containing this fix after

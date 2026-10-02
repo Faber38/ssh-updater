@@ -10,7 +10,7 @@ overview, package checks and system updates, SSH host-key verification,
 Docker/Compose support, and local offline help. SSH-accessible VMs and containers
 can also be managed as hosts.
 
-Stable release: **v1.2.4** · Current development version: **v1.2.5-beta5**
+Stable release: **v1.2.4** · Development status: **v1.2.5-beta6**
 [Deutsche README](README.md)
 
 ## Features
@@ -81,9 +81,11 @@ in-app help for details.
 
 1. Open **Konfiguration** (Configuration) and add hosts with their address, username,
    port, and password or SSH key.
-2. For each new host, open **Serveridentität prüfen** (Verify server identity).
-   Compare the displayed fingerprint with the server console or an independently
-   verified source, and confirm only if it matches.
+2. Use **Serveridentität prüfen** (Verify server identity) for selected rows in
+   Configuration. With no selected rows, all endpoints without a confirmed pin
+   are inspected. Inspection performs no login and creates no trust. Compare
+   fingerprints independently and explicitly confirm only the desired endpoints.
+   Each changed key requires an additional individual warning confirmation.
 3. Select the desired hosts in the main window and use **Prüfen** (Check) to look for
    updates. **Simulieren** (Simulate) shows a preview without performing package
    upgrades. For DNF and Arch, this is an update overview, not a full transaction plan.
@@ -246,8 +248,40 @@ Non-binding ideas, with no release commitment:
 - Log archiving and export
 - Optional status notifications via Telegram
 
+## Acknowledgements
+
+Special thanks to **Calimero078** for his extensive support in analysing and
+hardening SSH and credential security. His testing, reviews and
+security-hardening implementation provided important groundwork for improving
+host-key verification, the authenticated trust store and controlled credential
+release.
+
+Thanks also to everyone testing SSH Updater and helping to improve its
+robustness through detailed bug reports and unusual real-world configurations.
+
 ## License
 
 MIT License – see [LICENSE](LICENSE).
 
 Copyright (c) 2025 Holger Mangold
+
+
+### Server identity and connection settings
+
+The host/IP, port, user and explicit key path stored in SSH Updater are authoritative.
+`~/.ssh/config` is not loaded automatically. Config-based aliases, HostKeyAlias,
+ProxyJump, ProxyCommand, IdentityFile, CertificateFile and other config options
+are deliberately unsupported in product connections. Use directly reachable IPs
+or DNS names. Default keys and the SSH agent remain available for normal key
+logins without an explicit key path; identity inspection uses no credentials.
+
+Rows sharing the same address and port share a trusted pin. The application trust
+store is authenticated with an HMAC derived from the existing vault key. Legacy
+stores without a MAC require explicit reconfirmation: existing files are saved
+as inactive quarantine copies without overwriting earlier copies, and an empty
+authenticated store is created. Recovery is available at startup. Invalid
+store/MAC pairs block SSH; existing pins are never automatically re-signed.
+The existing vault and Credential-v2 formats remain unchanged.
+
+This protection targets a controlled private LAN. It does not prevent replay of
+an older valid store/MAC pair. Back up the matching pair and its associated vault.

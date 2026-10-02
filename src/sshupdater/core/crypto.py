@@ -4,7 +4,9 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import hashes, hmac
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.exceptions import InvalidSignature
 from cryptography.fernet import Fernet, InvalidToken
 
 # Speicherort des Salts (~/.sshupdater/vault.salt)
@@ -13,6 +15,8 @@ from . import storage, credentials
 
 _SALT_PATH = DATA_DIR / "vault.salt"
 _FERNET: Optional[Fernet] = None
+_MAC_KEY: Optional[bytes] = None
+_TRUSTSTORE_MAC_INFO = b"ssh-updater-truststore-mac-v1"
 
 # NEU:
 class WrongPassword(Exception):
@@ -85,8 +89,9 @@ def _encrypted_tokens():
 
 def set_master_password(password: str) -> None:
     """Leitet den Schlüssel ab, verifiziert (oder erzeugt) den Keystore und entsperrt das Vault."""
-    global _FERNET
+    global _FERNET, _MAC_KEY
     _FERNET = None
+    _MAC_KEY = None
     keystore_exists()
     salt = _get_or_create_salt()
     key = _derive_key(password, salt)
@@ -111,12 +116,14 @@ def set_master_password(password: str) -> None:
         except (InvalidToken, TypeError, credentials.CredentialError):
             raise OSError('Vault inkonsistent: Gespeicherte Zugangsdaten passen nicht zum Schlüssel '
                           'oder sind beschädigt. Bitte zusammengehörige Sicherung wiederherstellen.') from None
+        _MAC_KEY = _derive_mac_key(key)
         _FERNET = f
         return
 
     # Erstlauf: Verifier anlegen
     token = f.encrypt(_CHALLENGE)
     storage.write_private(_VERIFIER_PATH, token, exclusive=True)
+    _MAC_KEY = _derive_mac_key(key)
     _FERNET = f
 
 def is_unlocked() -> bool:
@@ -147,3 +154,31 @@ def decrypt_host_password(token, host):
     if not is_unlocked():
         raise credentials.CredentialError('Vault ist gesperrt.')
     return credentials.decrypt(_FERNET, token, host)
+
+
+# Trust-store key separation adapted from Calimero PR #3; vault format unchanged.
+def _derive_mac_key(fernet_key: bytes) -> bytes:
+    """Truststore-MAC-Schlüssel, getrennt vom Vault-Schlüssel abgeleitet."""
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
+                info=_TRUSTSTORE_MAC_INFO).derive(fernet_key)
+
+
+def truststore_mac(data: bytes) -> bytes:
+    """HMAC-SHA256 über den Truststore-Inhalt; nur bei entsperrtem Vault."""
+    if _MAC_KEY is None:
+        raise RuntimeError("Vault ist gesperrt.")
+    h = hmac.HMAC(_MAC_KEY, hashes.SHA256())
+    h.update(data)
+    return h.finalize()
+
+
+def verify_truststore(data: bytes, tag: bytes) -> bool:
+    if _MAC_KEY is None:
+        raise RuntimeError("Vault ist gesperrt.")
+    h = hmac.HMAC(_MAC_KEY, hashes.SHA256())
+    h.update(data)
+    try:
+        h.verify(tag)
+        return True
+    except InvalidSignature:
+        return False

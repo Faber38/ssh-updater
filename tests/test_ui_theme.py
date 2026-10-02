@@ -36,6 +36,7 @@ class ThemeTests(unittest.TestCase):
              mock.patch.object(entry.settings,'initialize'), \
              mock.patch.object(entry.crypto,'keystore_exists',return_value=True), \
              mock.patch.object(entry.crypto,'set_master_password'), \
+             mock.patch.object(entry.host_keys,'load'), \
              mock.patch.object(entry.QInputDialog,'getText',return_value=('test',True)), \
              mock.patch.object(entry.db,'init_db'), \
              mock.patch.object(entry,'MainWindow',side_effect=create), \

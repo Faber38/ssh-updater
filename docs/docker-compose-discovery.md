@@ -155,8 +155,8 @@ die Service-/Image-Ergebnisse der letzten normalen Prüfung. Details und
 bewusste Compose-Grenzen stehen in der verlinkten Imageprüfungs-Dokumentation.
 
 Integration ausschließlich in die Host-Prüfung: keine zusätzlichen Abfragen
-bei Upgrade, Simulation, Autoremove, Reboot, Host-Key-Inspektion oder auf
-ProxyJump-Zwischenstationen. SSH-Verbindungs- und Sicherheitsrichtlinien,
+bei Upgrade, Simulation, Autoremove, Reboot oder Host-Key-Inspektion.
+Verwaltete Verbindungen verwenden direkte Ziele; ProxyJump wird nicht unterstützt. SSH-Verbindungs- und Sicherheitsrichtlinien,
 DB-/Konfigurationsschema und Anwendungsversion sind unverändert.
 Discovery und Detailansicht führen keine Docker-Updates, Neustarts oder
 Löschaktionen aus. Der separate Updatezyklus verwendet ihre Sitzungsergebnisse

@@ -4,7 +4,7 @@ from PyQt6.QtWidgets import QInputDialog, QLineEdit
 
 from sshupdater.ui_main import MainWindow
 from sshupdater.ui_text import PlainMessageBox as QMessageBox
-from sshupdater.core import db, crypto, settings
+from sshupdater.core import db, crypto, host_keys, settings
 from sshupdater.ui_resources import resource_path
 from sshupdater.ui_theme import apply_theme
 
@@ -60,6 +60,16 @@ def main():
     except Exception as e:
         QMessageBox.critical(None, "Fehler", f"Schlüssel-Init fehlgeschlagen:\n{e}")
         return 1
+
+    try:
+        if first_run and not settings.KNOWN_HOSTS.exists() and not settings.KNOWN_HOSTS_MAC.exists():
+            host_keys.initialize_fresh()
+        else:
+            host_keys.load()
+    except (OSError, ValueError) as exc:
+        from .ui_host_keys import recover_truststore
+        if not recover_truststore(None, exc):
+            return 1
 
     # ---------------------------------------------------------------------------
 

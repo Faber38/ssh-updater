@@ -102,7 +102,7 @@ class HostEditDialog(QDialog):
         self.in_auth.addItems(["key", "password"])
         self.in_auth.setCurrentText(self._host.get("auth_method", "key"))
         self.in_key = QLineEdit(self._host.get("key_path", "") or "")
-        self.in_key.setPlaceholderText("Leer: SSH-Konfiguration / Standard-Keys / lokaler Agent")
+        self.in_key.setPlaceholderText("Leer: Standardschlüssel / lokaler SSH-Agent")
         btn_key = QPushButton("…")
         btn_key.clicked.connect(self._choose_key)
         key_row = QHBoxLayout()
@@ -137,7 +137,7 @@ class HostEditDialog(QDialog):
                 form.addRow(QLabel('Legacy-Passwort: vor Passwortanmeldung einmal erneut eingeben.'))
         lay.addLayout(form)
 
-        hint = QLabel("SSH-Key: gewählte Datei, sonst SSH-Konfiguration / Standard-Keys / lokaler Agent.\nAgent- und X11-Forwarding sind immer deaktiviert.")
+        hint = QLabel("SSH-Key: gewählte Datei, sonst Standardschlüssel / lokaler SSH-Agent.\nDie hier gespeicherten Verbindungsdaten gelten; ~/.ssh/config wird nicht geladen.\nAgent- und X11-Forwarding sind immer deaktiviert.")
         hint.setStyleSheet("color:#aaa;")
         lay.addWidget(hint)
 
@@ -236,6 +236,7 @@ class ConfigDialog(QDialog):
         self.table.setSelectionBehavior(
             QtWidgets.QAbstractItemView.SelectionBehavior.SelectRows
         )
+        self.table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(
             QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers
         )
@@ -304,13 +305,14 @@ class ConfigDialog(QDialog):
 
             # host-id in row speichern
             self.table.setVerticalHeaderItem(r, QTableWidgetItem(str(h["id"])))
-        if hosts:
-            self.table.selectRow(0)
+        self.table.clearSelection()
+        self.table.setCurrentCell(-1, -1)
 
     def _current_host_id(self) -> int | None:
-        row = self.table.currentRow()
-        if row < 0:
+        rows = self.table.selectionModel().selectedRows()
+        if len(rows) != 1:
             return None
+        row = rows[0].row()
         vh = self.table.verticalHeaderItem(row)
         return int(vh.text()) if vh else None
 
@@ -367,14 +369,26 @@ class ConfigDialog(QDialog):
             self._reload()
 
     def _check_identity(self):
-        hid = self._current_host_id()
-        if hid is None:
-            QMessageBox.information(self, "Hinweis", "Bitte einen Host auswählen.")
+        from .ui_host_keys import HostKeyDialog, inspection_targets, recover_truststore
+        selected_ids = [int(self.table.verticalHeaderItem(index.row()).text())
+                        for index in self.table.selectionModel().selectedRows()]
+        try:
+            hosts = ([host for hid in selected_ids if (host := db.get_host(hid)) is not None]
+                     if selected_ids else db.list_hosts())
+            targets = inspection_targets(hosts, selected_ids)
+        except (OSError, ValueError, db.sqlite3.Error) as exc:
+            from .core import host_keys
+            if isinstance(exc, host_keys.TruststoreIntegrityError):
+                recover_truststore(self, exc)
+            else:
+                QMessageBox.warning(self, 'Serveridentität nicht prüfbar', str(exc))
             return
-        from .ui_host_keys import HostKeyDialog
-        host = db.get_host(hid)
-        if host:
-            HostKeyDialog(host, self).exec()
+        if not targets:
+            QMessageBox.information(self, 'Serveridentitäten',
+                                    'Keine unbestätigten Endpunkte vorhanden. '
+                                    'Für eine erneute Prüfung Hosts ausdrücklich auswählen.')
+            return
+        HostKeyDialog(targets, self).exec()
 
     def _delete(self):
         hid = self._current_host_id()

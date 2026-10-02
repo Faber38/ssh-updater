@@ -20,7 +20,7 @@ class VaultInitializationTests(unittest.TestCase):
                 (crypto, 'DATA_DIR', self.root),
                 (crypto, '_SALT_PATH', self.root / 'vault.salt'),
                 (crypto, '_VERIFIER_PATH', self.root / 'vault.verify'),
-                (crypto, '_FERNET', None), (db, 'DB_PATH', self.root / 'app.db')):
+                (crypto, '_FERNET', None), (crypto, '_MAC_KEY', None), (db, 'DB_PATH', self.root / 'app.db')):
             patch = mock.patch.object(module, name, value)
             patch.start()
             self.addCleanup(patch.stop)
