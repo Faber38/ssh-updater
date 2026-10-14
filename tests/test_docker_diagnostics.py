@@ -31,7 +31,7 @@ class ReportTests(unittest.TestCase):
     def test_existing_context_error_does_not_invent_subcause(self):
         host, project = fixture()
         text = report(host, project, exported_at=NOW)
-        for expected in ('1.2.5-beta7', '2026-10-14T12:00:00+00:00', 'Fehlerklasse: context',
+        for expected in ('1.2.5-beta8', '2026-10-14T12:00:00+00:00', 'Fehlerklasse: context',
                          'Kontextprüfung: fehlgeschlagen', 'Genauere Ursache im Prüfergebnis nicht erfasst.',
                          'Compose-Config-Auflösung: nicht erfasst', 'Freigabe möglich: nein'):
             self.assertIn(expected, text)
@@ -184,7 +184,10 @@ class DialogTests(unittest.TestCase):
             path = Path(tmp) / 'diagnose.txt'
             with mock.patch.object(QtWidgets.QFileDialog, 'getSaveFileName', return_value=(str(path), '')) as picker:
                 dialog.save_button.click()
-            text = path.read_bytes().decode('utf-8')
+            exported = path.read_bytes()
+            self.assertNotIn(b'\r', exported)
+            self.assertIn('Prüfergebnis'.encode('utf-8'), exported)
+            text = exported.decode('utf-8')
             self.assertEqual(text, dialog.text.toPlainText())
             self.assertIn('Fehlerklasse: context', text)
             self.assertRegex(picker.call_args.args[2], r'^ssh-updater-docker-diagnose-\d{8}-\d{6}\.txt$')
@@ -218,8 +221,15 @@ class DialogTests(unittest.TestCase):
                 self.assertTrue(dialog.isVisible())
                 self.assertTrue(dialog.text.isReadOnly())
                 self.assertIn('private-project', dialog.project_label.text())
-                dialog.resize(900, 700)
-                self.assertEqual(dialog.width(), 900)
+                # Qt's layout minimum depends on platform font metrics and style.
+                original_size = dialog.size()
+                dialog.resize(original_size + QtCore.QSize(100, 80))
+                self.app.processEvents()
+                self.assertGreater(dialog.width(), original_size.width())
+                self.assertGreater(dialog.height(), original_size.height())
+                dialog.resize(original_size)
+                self.app.processEvents()
+                self.assertEqual(dialog.size(), original_size)
                 with tempfile.TemporaryDirectory() as tmp:
                     path = Path(tmp) / 'report.txt'
                     with mock.patch.object(QtWidgets.QFileDialog, 'getSaveFileName', return_value=(str(path), '')):

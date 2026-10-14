@@ -63,7 +63,7 @@ class DockerDiagnosticsDialog(QtWidgets.QDialog):
             return
         text = report(self.host, self.project, exported_at=datetime.now(timezone.utc), language=self.report_language)
         try:
-            Path(path).write_text(text, encoding='utf-8')
+            Path(path).write_text(text, encoding='utf-8', newline='\n')
         except (OSError, ValueError):
             QtWidgets.QMessageBox.warning(self, 'Speichern fehlgeschlagen',
                                           'Der Diagnosebericht konnte nicht gespeichert werden. Bitte Speicherort und Schreibrechte prüfen.')
