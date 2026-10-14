@@ -3,6 +3,7 @@ from copy import deepcopy
 import re
 from PyQt6 import QtCore, QtWidgets
 from .ui_docker import engine_version
+from .ui_docker_diagnostics import DockerDiagnosticsDialog
 from .docker_plan import image_identity, project_eligible
 from .core.docker_image_updates import REASONS
 from .core.docker_context import EMPTY, PROJECT_DOTENV_CONTEXT
@@ -114,6 +115,7 @@ class DockerUpdatePreviewDialog(QtWidgets.QDialog):
         self.details = QtWidgets.QPlainTextEdit()
         self.details.setReadOnly(True)
         layout.addWidget(self.details, 5)
+        self.diagnostic_targets = {}
         first = None
         for host in self.snapshot:
             compose = re.sub(r'^\s*Docker\s+Compose\s+version\s+', '', host.get('compose_version') or '', flags=re.I)
@@ -122,6 +124,9 @@ class DockerUpdatePreviewDialog(QtWidgets.QDialog):
             for project in host['projects']:
                 item = QtWidgets.QTreeWidgetItem(root, [project['name'], project.get('image_updates', {}).get('summary') or 'Nicht geprüft'])
                 item.setData(0, QtCore.Qt.ItemDataRole.UserRole, description(host, project))
+                key = len(self.diagnostic_targets)
+                item.setData(0, QtCore.Qt.ItemDataRole.UserRole + 1, key)
+                self.diagnostic_targets[key] = (host, project)
                 first = first or item
         self.projects.expandAll()
         self.projects.resizeColumnToContents(0)
@@ -129,10 +134,29 @@ class DockerUpdatePreviewDialog(QtWidgets.QDialog):
         if first is not None:
             self.projects.setCurrentItem(first)
         self.buttons = QtWidgets.QDialogButtonBox()
+        self.analysis_button = self.buttons.addButton('Fehleranalyse', QtWidgets.QDialogButtonBox.ButtonRole.ActionRole)
+        self.analysis_button.clicked.connect(self._open_diagnostics)
         self.close_button = self.buttons.addButton('Schließen', QtWidgets.QDialogButtonBox.ButtonRole.RejectRole)
         self.buttons.rejected.connect(self.reject)
         layout.addWidget(self.buttons)
+        self._show_project(self.projects.currentItem(), None)
 
     def _show_project(self, item, previous):
         text = item.data(0, QtCore.Qt.ItemDataRole.UserRole) if item else ''
         self.details.setPlainText(text or '')
+        if hasattr(self, 'analysis_button'):
+            key = item.data(0, QtCore.Qt.ItemDataRole.UserRole + 1) if item else None
+            target = self.diagnostic_targets.get(key)
+            self.analysis_button.setEnabled(bool(target and target[1].get('image_updates')))
+
+    def _open_diagnostics(self):
+        item = self.projects.currentItem()
+        key = item.data(0, QtCore.Qt.ItemDataRole.UserRole + 1) if item else None
+        if key not in self.diagnostic_targets:
+            return
+        host, project = self.diagnostic_targets[key]
+        if not project.get('image_updates'):
+            return
+        dialog = DockerDiagnosticsDialog(self, host, project)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()

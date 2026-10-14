@@ -10,7 +10,7 @@ overview, package checks and system updates, SSH host-key verification,
 Docker/Compose support, and local offline help. SSH-accessible VMs and containers
 can also be managed as hosts.
 
-Stable release: **v1.2.4** · Development status: **v1.2.5-beta6**
+Stable release: **v1.2.4** · Development status: **v1.2.5-beta7**
 [Deutsche README](README.md)
 
 ## Features
@@ -104,6 +104,8 @@ connection loss, the target's state may also be unknown; before retrying, check
 whether the action is still running or has already finished on that system.
 
 ## Docker / Compose
+
+**Fehleranalyse** (Error analysis) in the update preview shows an anonymized diagnostic report from existing check results. Export performs no new SSH or Docker queries and changes no containers. Reports exclude secrets; unavailable causes remain marked as not recorded. The UTF-8 text file is saved only at the user’s request to their chosen location; sharing is voluntary. There is no automatic transmission. Reports in public GitHub issues can be read and downloaded by others. Please review the report before sharing it.
 
 After a host check, discovered Compose projects appear indented below their host.
 Host checkboxes select system actions; project checkboxes select Docker/Compose

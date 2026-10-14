@@ -14,6 +14,7 @@ import shlex
 
 from .remote_process import capture, RemoteTimeoutError
 from . import docker_context as contexts
+from .docker_diagnostic_codes import allowed_code
 
 TIMEOUT = 20
 TOTAL_TIMEOUT = 180
@@ -51,9 +52,10 @@ REASONS = {
 
 
 class CheckFailure(Exception):
-    def __init__(self, kind, command=None, exit_code=None):
+    def __init__(self, kind, command=None, exit_code=None, *, diagnostic_code=None):
         super().__init__(REASONS[kind])
         self.kind, self.command, self.exit_code = kind, command, exit_code
+        self.diagnostic_code = allowed_code(diagnostic_code, kind)
 
 
 @dataclass
@@ -77,11 +79,13 @@ class ImageCheck:
     note: str = ''
     command: str | None = None
     exit_code: int | None = None
+    diagnostic_code: str | None = None
 
     def fail(self, error):
         self.status = 'uncheckable'
         self.reason, self.note = error.kind, str(error)
         self.command, self.exit_code = error.command, error.exit_code
+        self.diagnostic_code = allowed_code(error.diagnostic_code, error.kind)
         return self
 
 
@@ -145,11 +149,11 @@ def failure_kind(code, message):
 
 def reference(value):
     if not isinstance(value, str) or not re.fullmatch(r'[a-z0-9][a-zA-Z0-9._/:@+-]*', value) or '://' in value:
-        raise CheckFailure('context')
+        raise CheckFailure('context', diagnostic_code='IMAGE_REFERENCE_INVALID')
     if '@' in value:
         base, digest = value.split('@', 1)
         if not DIGEST.fullmatch(digest):
-            raise CheckFailure('context')
+            raise CheckFailure('context', diagnostic_code='IMAGE_REFERENCE_INVALID')
     else:
         base, digest = value, None
     first = base.split('/')[0]
@@ -166,9 +170,10 @@ def reference(value):
 
 def descriptor(value):
     if not isinstance(value, dict) or value.get('mediaType') not in INDEX_TYPES + MANIFEST_TYPES:
-        raise CheckFailure('identity')
+        raise CheckFailure('identity', diagnostic_code=(
+            'IMAGE_DESCRIPTOR_MISSING' if value is None else 'IMAGE_DESCRIPTOR_INVALID'))
     if not isinstance(value.get('digest'), str) or not DIGEST.fullmatch(value['digest']):
-        raise CheckFailure('identity')
+        raise CheckFailure('identity', diagnostic_code='IMAGE_DESCRIPTOR_INVALID')
     return {'mediaType': value['mediaType'], 'digest': value['digest']}
 
 
@@ -204,16 +209,16 @@ def compare(local, remote, platform, explicit_platform=''):
     """Compare equal descriptor types; no ID/config/index coercion."""
     parts = platform.split('/')
     if len(parts) not in (2, 3) or any(not p or p == 'unknown' for p in parts):
-        raise CheckFailure('platform')
+        raise CheckFailure('platform', diagnostic_code='IMAGE_PLATFORM_INVALID')
     if explicit_platform:
         wanted = explicit_platform.split('/')
         if (len(wanted) not in (2, 3) or any(not p or p == 'unknown' for p in wanted)
                 or wanted[:2] != parts[:2] or (len(wanted) == 3 and wanted != parts)):
-            raise CheckFailure('platform')
+            raise CheckFailure('platform', diagnostic_code='IMAGE_PLATFORM_MISMATCH')
     old, new = descriptor(local), descriptor(remote)
     if old['mediaType'] in INDEX_TYPES:
         if old['mediaType'] != new['mediaType']:
-            raise CheckFailure('identity')
+            raise CheckFailure('identity', diagnostic_code='IMAGE_DESCRIPTOR_TYPE_MISMATCH')
         level = 'index'
     elif new['mediaType'] in INDEX_TYPES:
         candidates = []
@@ -227,15 +232,16 @@ def compare(local, remote, platform, explicit_platform=''):
                 continue
             candidates.append(entry)
         if len(candidates) != 1:
-            raise CheckFailure('platform')
+            raise CheckFailure('platform', diagnostic_code=(
+                'IMAGE_PLATFORM_NOT_FOUND' if not candidates else 'IMAGE_PLATFORM_AMBIGUOUS'))
         new = descriptor(candidates[0])
         if new['mediaType'] != old['mediaType']:
-            raise CheckFailure('identity')
+            raise CheckFailure('identity', diagnostic_code='IMAGE_DESCRIPTOR_TYPE_MISMATCH')
         level = 'platform_manifest'
     else:
         # A standalone remote manifest has no provable platform descriptor here.
         # Index -> platform selection is supported; this case is deferred.
-        raise CheckFailure('identity')
+        raise CheckFailure('identity', diagnostic_code='IMAGE_COMPARISON_UNSUPPORTED')
     return ('current' if old['digest'] == new['digest'] else 'update_available'), level, new
 
 
@@ -294,7 +300,7 @@ class Checker:
         if cached is not None:
             return cached
         if self.registry_session.blocked(limit_key):
-            raise CheckFailure('rate_limit_backoff')
+            raise CheckFailure('rate_limit_backoff', diagnostic_code='REGISTRY_RATE_LIMIT_BACKOFF')
         if self.buildx is None:
             try:
                 await self.run(['docker', 'buildx', 'version'], parse=False)
@@ -310,6 +316,11 @@ class Checker:
                 ['docker', 'buildx', 'imagetools', 'inspect', ref, '--format', '{{json .Manifest}}'])
             return self.registry_session.put(cache_key, remote)
         except CheckFailure as exc:
+            exc.diagnostic_code = allowed_code({
+                'auth': 'REGISTRY_AUTH_FAILED', 'rate_limit': 'REGISTRY_RATE_LIMIT',
+                'network': 'REGISTRY_NETWORK_FAILED', 'timeout': 'REGISTRY_TIMEOUT',
+                'identity': 'REGISTRY_METADATA_INVALID', 'invalid_output': 'REGISTRY_METADATA_INVALID',
+            }.get(exc.kind), exc.kind)
             if exc.kind == 'rate_limit':
                 self.registry_session.rate_limit(limit_key)
             self.registry[ref] = exc
@@ -327,9 +338,9 @@ class Checker:
                 return result
             ref = reference(result.image)
             if ref != reference(container.get('Config', {}).get('Image')):
-                raise CheckFailure('drift')
+                raise CheckFailure('drift', diagnostic_code='IMAGE_REFERENCE_DRIFT')
             if not DIGEST.fullmatch(result.image_id):
-                raise CheckFailure('identity')
+                raise CheckFailure('identity', diagnostic_code='IMAGE_ID_INVALID')
             try:
                 if result.image_id not in self.local:
                     records = await self.run(['docker', 'image', 'inspect', result.image_id])
@@ -350,7 +361,7 @@ class Checker:
                 result.identity_source = 'container_manifest_descriptor'
                 # Keep fallback evidence container-scoped, out of the image cache.
             if metadata.get('Id') != result.image_id:
-                raise CheckFailure('identity')
+                raise CheckFailure('identity', diagnostic_code='IMAGE_ID_MISMATCH')
             result.os = metadata.get('Os') or ''
             result.architecture = metadata.get('Architecture') or ''
             result.variant = metadata.get('Variant') or ''
@@ -387,7 +398,7 @@ class Checker:
         if (len(paths) != 1 or not isinstance(paths[0], str) or not paths[0].startswith('/')
                 or ',' in paths[0] or '\n' in paths[0] or '\r' in paths[0]
                 or project.get('config_files_raw') not in (None, paths[0])):
-            raise CheckFailure('context')
+            raise CheckFailure('context', diagnostic_code='COMPOSE_FILE_BINDING_INVALID')
         path = paths[0]
         workdir = str(PurePosixPath(path).parent)
         # Conservative admission gate only, NOT a YAML interpreter. Compose does
@@ -395,9 +406,9 @@ class Checker:
         source = await self.run(['cat', '--', path], parse=False)
         if (any(c in source for c in ('\\','!', '&', '*', '%'))
                 or re.search(r'include|extends|profiles|env_file|provider|models|pre_start|post_start|pre_stop', source, re.I)):
-            raise CheckFailure('context')
+            raise CheckFailure('context', diagnostic_code='COMPOSE_SOURCE_FILTER')
         if not contexts.interpolation_allowed(source):
-            raise CheckFailure('context')
+            raise CheckFailure('context', diagnostic_code='COMPOSE_INTERPOLATION_REJECTED')
         ids_text = await self.run(['docker', 'container', 'ls', '--quiet', '--no-trunc',
                                   '--filter', f'label={LABEL}project={name}'], parse=False)
         ids = ids_text.split()
@@ -420,58 +431,66 @@ class Checker:
                     or labels.get(LABEL + 'project.working_dir') != workdir
                     or labels.get(LABEL + 'project.environment_file') not in (None, '', '/dev/null', workdir + '/.env')
                     or labels.get(LABEL + 'oneoff', 'False').lower() != 'false'):
-                raise CheckFailure('context')
+                raise CheckFailure('context', diagnostic_code='COMPOSE_CONTAINER_BINDING_INVALID')
             service = labels.get(LABEL + 'service')
             if not service:
-                raise CheckFailure('context')
+                raise CheckFailure('context', diagnostic_code='COMPOSE_SERVICE_LABEL_MISSING')
             by_service.setdefault(service, []).append(container)
             environment_labels.add(labels.get(LABEL + 'project.environment_file') or '')
         self.context = contexts.EMPTY
         if '/dev/null' in environment_labels:
             if environment_labels - {'', '/dev/null'}:
-                raise CheckFailure('context')
+                raise CheckFailure('context', diagnostic_code='COMPOSE_ENV_LABEL_CONFLICT')
         else:
             try:
                 kind = await self.run(contexts.probe_command(path), parse=False)
             except CheckFailure:
-                raise CheckFailure('context') from None
+                raise CheckFailure('context', diagnostic_code='COMPOSE_ENV_PROBE_FAILED') from None
             if kind == contexts.PROJECT_DOTENV_CONTEXT:
                 self.context = (kind, workdir + '/.env')
             elif kind != contexts.EMPTY_CONTEXT or workdir + '/.env' in environment_labels:
-                raise CheckFailure('context')
+                raise CheckFailure('context', diagnostic_code=('COMPOSE_ENV_EXPECTED_BUT_ABSENT'
+                    if kind == contexts.EMPTY_CONTEXT else 'COMPOSE_ENV_PROBE_FAILED'))
         if self.context == contexts.EMPTY and '$' in source:
-            raise CheckFailure('context')
+            raise CheckFailure('context', diagnostic_code='COMPOSE_EMPTY_CONTEXT_DOLLAR_REJECTED')
         config = await self.resolved_config(name, path)
         services = config.get('services')
         if not isinstance(services, dict) or not services or not set(by_service) <= set(services):
-            raise CheckFailure('context')
+            raise CheckFailure('context', diagnostic_code='COMPOSE_SERVICE_MAPPING_INVALID')
         if len(services) > MAX_CONTAINERS:
             raise CheckFailure('limit')
         if self.context != contexts.EMPTY:
             for spec in services.values():
                 if not isinstance(spec, dict) or spec.get('profiles') or spec.get('env_file'):
-                    raise CheckFailure('context')
+                    raise CheckFailure('context', diagnostic_code='COMPOSE_SERVICE_POLICY_REJECTED')
                 environment = spec.get('environment', {})
                 if (not isinstance(environment, dict)
                         or any(value is None or key in contexts.INFRASTRUCTURE
                                or key.startswith(('COMPOSE_', 'DOCKER_'))
                                for key, value in environment.items())):
                     # No unresolved/pass-through infrastructure environment.
-                    raise CheckFailure('context')
+                    raise CheckFailure('context', diagnostic_code='COMPOSE_ENVIRONMENT_REJECTED')
         return path, source, config, by_service
 
     async def resolved_config(self, name, path):
-        if self.context == contexts.EMPTY:
-            return await self.run(compose_command(name, path) +
-                                  ['config', '--format', 'json', '--no-interpolate', '--no-env-resolution'])
-        return await self.run(contexts.config_command(name, path, self.context), strict_stderr=True)
+        try:
+            if self.context == contexts.EMPTY:
+                return await self.run(compose_command(name, path) +
+                                      ['config', '--format', 'json', '--no-interpolate', '--no-env-resolution'])
+            return await self.run(contexts.config_command(name, path, self.context), strict_stderr=True)
+        except CheckFailure as exc:
+            code = {'context': 'COMPOSE_CONFIG_STDERR',
+                    'invalid_output': 'COMPOSE_CONFIG_INVALID_JSON'}.get(exc.kind, 'COMPOSE_CONFIG_FAILED')
+            exc.diagnostic_code = allowed_code(code, exc.kind)
+            raise
 
     async def verify_config(self, name, path, source, config):
         """Recheck effective dotenv config, not dotenv bytes/comments/unused keys."""
         if self.context != contexts.EMPTY:
-            if (await self.run(contexts.probe_command(path), parse=False) != contexts.PROJECT_DOTENV_CONTEXT
-                    or compose_identity(source, await self.resolved_config(name, path)) != compose_identity(source, config)):
-                raise CheckFailure('config')
+            if await self.run(contexts.probe_command(path), parse=False) != contexts.PROJECT_DOTENV_CONTEXT:
+                raise CheckFailure('config', diagnostic_code='COMPOSE_CONTEXT_CHANGED')
+            if compose_identity(source, await self.resolved_config(name, path)) != compose_identity(source, config):
+                raise CheckFailure('config', diagnostic_code='COMPOSE_CONFIG_CHANGED')
 
     async def _project(self, project):
         path, source, config, by_service = await self.resolve_project(project)
@@ -479,7 +498,7 @@ class Checker:
         results = []
         for service, spec in services.items():
             if not isinstance(spec, dict) or spec.get('profiles') or spec.get('env_file'):
-                raise CheckFailure('context')
+                raise CheckFailure('context', diagnostic_code='COMPOSE_SERVICE_POLICY_REJECTED')
             if service not in by_service:
                 results.append(ImageCheck(service=service, image=spec.get('image', '')).fail(CheckFailure('not_running')))
                 continue
@@ -487,7 +506,7 @@ class Checker:
                 results.append(await self.image(container, service, spec))
         # Detect a concurrent Compose file edit; do not publish a stale conclusion.
         if await self.run(['cat', '--', path], parse=False) != source:
-            raise CheckFailure('context')
+            raise CheckFailure('context', diagnostic_code='COMPOSE_SOURCE_CHANGED')
         await self.verify_config(project['name'], path, source, config)
         result = project_result(results)
         result['compose_identity'] = compose_identity(source, config)

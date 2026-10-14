@@ -10,7 +10,7 @@ LANs. Es verbindet eine Mehrhostübersicht, Paketprüfung und Systemupdates,
 SSH-/Host-Key-Prüfung, Docker-/Compose-Unterstützung und lokale Offline-Hilfe.
 Auch per SSH erreichbare VMs und Container können als Hosts verwaltet werden.
 
-Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta6**
+Stabile Veröffentlichung: **v1.2.4** · Aktueller Entwicklungsstand: **v1.2.5-beta7**
 [English README](README_EN.md)
 
 ## Features
@@ -105,6 +105,8 @@ oder Verbindungsabbruch kann der Zustand am Ziel unbekannt sein; vor einem erneu
 Start dort prüfen, ob die Aktion noch läuft oder bereits abgeschlossen ist.
 
 ## Docker / Compose
+
+**Fehleranalyse** in der Update-Vorschau zeigt einen anonymisierten Diagnosebericht aus vorhandenen Prüfergebnissen. Beim Export erfolgen keine neuen SSH-/Docker-Abfragen und keine Containeränderung. Der Bericht enthält keine Secrets; fehlende Ursachen bleiben als nicht erfasst gekennzeichnet. Gespeichert wird die UTF-8-Textdatei nur auf Benutzerentscheidung am gewählten Ort; die Weitergabe ist freiwillig. Es erfolgt keine automatische Übertragung. Berichte in öffentlichen GitHub-Issues sind für andere lesbar und herunterladbar. Bitte den Bericht vor der Weitergabe prüfen.
 
 Nach einer Hostprüfung erscheinen erkannte Compose-Projekte eingerückt unter
 ihrem Host. Hostcheckboxen wählen Systemaktionen, Projektcheckboxen Docker-/
