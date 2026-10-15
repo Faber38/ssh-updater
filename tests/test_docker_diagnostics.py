@@ -7,6 +7,7 @@ from unittest import mock
 from contextlib import ExitStack
 
 from PyQt6 import QtCore, QtWidgets
+from sshupdater import __version__
 from sshupdater.docker_diagnostics import report
 from sshupdater.ui_docker_diagnostics import DockerDiagnosticsDialog, PRIVACY_DE, PRIVACY_EN
 from sshupdater.ui_docker_preview import DockerUpdatePreviewDialog
@@ -31,7 +32,7 @@ class ReportTests(unittest.TestCase):
     def test_existing_context_error_does_not_invent_subcause(self):
         host, project = fixture()
         text = report(host, project, exported_at=NOW)
-        for expected in ('1.2.5-beta8', '2026-10-14T12:00:00+00:00', 'Fehlerklasse: context',
+        for expected in (__version__, '2026-10-14T12:00:00+00:00', 'Fehlerklasse: context',
                          'Kontextprüfung: fehlgeschlagen', 'Genauere Ursache im Prüfergebnis nicht erfasst.',
                          'Compose-Config-Auflösung: nicht erfasst', 'Freigabe möglich: nein'):
             self.assertIn(expected, text)

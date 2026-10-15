@@ -166,7 +166,7 @@ class WorkflowModeTests(unittest.TestCase):
             (root / 'dist' / binary).write_bytes(b'packaging-test-fixture')
             (root / 'dist' / 'unrelated.txt').write_text('Must not be packaged', encoding='utf-8')
             (root / 'LICENSE').write_bytes(license_bytes)
-            for label in ('v1.2.5', 'v1.2.5-beta', 'v1.2.5-beta2', 'v1.2.5-beta7', 'v1.2.5-beta8', 'v1.2.5-beta9'):
+            for label in ('v1.2.5', 'v1.2.5-beta', 'v1.2.5-beta2', 'v1.2.5-beta7', 'v1.2.5-beta8', 'v1.2.5-beta9', 'v1.2.5-beta10'):
                 env = dict(os.environ, ARTIFACT_LABEL=label)
                 args = (['powershell', '-NoProfile', '-NonInteractive', '-Command',
                          "$ErrorActionPreference = 'Stop'\n" + command] if windows else

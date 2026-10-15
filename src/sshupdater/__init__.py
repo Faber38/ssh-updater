@@ -1,2 +1,2 @@
 __app_name__ = "SSH Updater"
-__version__ = "1.2.5-beta9"
+__version__ = "1.2.5-beta10"
