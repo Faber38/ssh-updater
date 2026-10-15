@@ -21,7 +21,7 @@ class ReleaseTagTests(unittest.TestCase):
                     release.validate_tag(tag)
 
     def test_stable_and_beta_tags_require_exact_version_match(self):
-        versions = ('1.2.5', '1.2.5-beta', '1.2.5-beta2', '1.2.5-beta3', '1.2.5-beta4', '1.2.5-beta5', '1.2.5-beta6', '1.2.5-beta7', '1.2.5-beta8',
+        versions = ('1.2.5', '1.2.5-beta', '1.2.5-beta2', '1.2.5-beta3', '1.2.5-beta4', '1.2.5-beta5', '1.2.5-beta6', '1.2.5-beta7', '1.2.5-beta8', '1.2.5-beta9',
                     '1.2.5-beta10', '2.0.0', '2.0.0-beta')
         for current in versions:
             with self.subTest(version=current), mock.patch.object(release, 'version', return_value=current):
@@ -132,7 +132,7 @@ class WorkflowModeTests(unittest.TestCase):
         self.assertIn("prerelease: ${{ contains(needs.build-linux.outputs.release_tag, '-beta') }}", workflow)
         self.assertIn('name: SSH Updater ${{ needs.build-linux.outputs.release_tag }}', workflow)
         for current, expected in (('1.2.5', False), ('1.2.5-beta', True),
-                                  ('1.2.5-beta2', True), ('1.2.5-beta3', True), ('1.2.5-beta4', True), ('1.2.5-beta5', True), ('1.2.5-beta6', True), ('1.2.5-beta7', True), ('1.2.5-beta8', True), ('1.2.5-beta10', True),
+                                  ('1.2.5-beta2', True), ('1.2.5-beta3', True), ('1.2.5-beta4', True), ('1.2.5-beta5', True), ('1.2.5-beta6', True), ('1.2.5-beta7', True), ('1.2.5-beta8', True), ('1.2.5-beta9', True), ('1.2.5-beta10', True),
                                   ('2.0.0', False), ('2.0.0-beta', True)):
             with self.subTest(version=current), mock.patch.object(release, 'version', return_value=current):
                 result = release.validate_workflow('push', 'refs/tags/v' + current, self.sha)
@@ -166,7 +166,7 @@ class WorkflowModeTests(unittest.TestCase):
             (root / 'dist' / binary).write_bytes(b'packaging-test-fixture')
             (root / 'dist' / 'unrelated.txt').write_text('Must not be packaged', encoding='utf-8')
             (root / 'LICENSE').write_bytes(license_bytes)
-            for label in ('v1.2.5', 'v1.2.5-beta', 'v1.2.5-beta2', 'v1.2.5-beta7', 'v1.2.5-beta8'):
+            for label in ('v1.2.5', 'v1.2.5-beta', 'v1.2.5-beta2', 'v1.2.5-beta7', 'v1.2.5-beta8', 'v1.2.5-beta9'):
                 env = dict(os.environ, ARTIFACT_LABEL=label)
                 args = (['powershell', '-NoProfile', '-NonInteractive', '-Command',
                          "$ErrorActionPreference = 'Stop'\n" + command] if windows else

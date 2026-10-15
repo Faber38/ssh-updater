@@ -67,7 +67,7 @@ def main():
         else:
             host_keys.load()
     except (OSError, ValueError) as exc:
-        from .ui_host_keys import recover_truststore
+        from sshupdater.ui_host_keys import recover_truststore
         if not recover_truststore(None, exc):
             return 1
 
